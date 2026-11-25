@@ -1,0 +1,7 @@
+[package]
+name = "dsp_spike"
+version = "0.1.0"
+edition = "2021"
+description = "Phase 0 Spike 0.3: Deterministic, allocation-free Mouse-to-Right-Stick DSP engine and 250Hz timing benchmark"
+
+[dependencies]
