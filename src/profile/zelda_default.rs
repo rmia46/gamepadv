@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use evdev::KeyCode;
 
-use super::{GamepadAction, Profile};
+use super::{GamepadAction, Profile, StickMode};
 
 /// Returns the default 3D Action / Zelda profile.
 #[must_use]
@@ -45,6 +45,8 @@ pub fn zelda_default() -> Profile {
         toggle_key: KeyCode::KEY_F8,
         bindings,
         walk_scale: 0.5,
+        left_stick_mode: StickMode::Keys,
+        right_stick_mode: StickMode::Mouse,
     }
 }
 

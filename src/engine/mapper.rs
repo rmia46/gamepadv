@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use evdev::KeyCode;
 
-use crate::engine::mouse_stick::{quantize_stick_axes, MouseStickEngine, STICK_MAX_F64};
-use crate::profile::{GamepadAction, Profile};
+use crate::engine::mouse_stick::{
+    quantize_stick_axes, MouseStickConfig, MouseStickEngine, STICK_MAX_F64,
+};
+use crate::profile::{GamepadAction, Profile, StickMode};
 
 /// Complete snapshot of the virtual Xbox 360 gamepad state for a single tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -59,6 +61,18 @@ impl InputMapper {
         &self.mouse_stick
     }
 
+    /// Replaces the active [`Profile`], pruning any pressed keys no longer bound.
+    pub fn set_profile(&mut self, profile: Profile) {
+        self.profile = profile;
+        self.pressed
+            .retain(|code| self.profile.bindings.contains_key(code));
+    }
+
+    /// Updates the [`MouseStickEngine`] configuration.
+    pub fn set_mouse_config(&mut self, config: MouseStickConfig) {
+        self.mouse_stick.set_config(config);
+    }
+
     /// Handles a key or mouse-button press/release event.
     ///
     /// Returns `true` if `code` is bound in the active profile, or `false` if unmapped
@@ -85,10 +99,14 @@ impl InputMapper {
     pub fn tick(&mut self, dt_secs: f64) -> GamepadState {
         let mut state = GamepadState::default();
 
-        let mut stick_up = false;
-        let mut stick_down = false;
-        let mut stick_left = false;
-        let mut stick_right = false;
+        let mut left_up = false;
+        let mut left_down = false;
+        let mut left_left = false;
+        let mut left_right = false;
+        let mut right_up = false;
+        let mut right_down = false;
+        let mut right_left = false;
+        let mut right_right = false;
         let mut dpad_up = false;
         let mut dpad_down = false;
         let mut dpad_left = false;
@@ -119,38 +137,35 @@ impl InputMapper {
                 GamepadAction::DpadDown => dpad_down = true,
                 GamepadAction::DpadLeft => dpad_left = true,
                 GamepadAction::DpadRight => dpad_right = true,
-                GamepadAction::LeftStickUp => stick_up = true,
-                GamepadAction::LeftStickDown => stick_down = true,
-                GamepadAction::LeftStickLeft => stick_left = true,
-                GamepadAction::LeftStickRight => stick_right = true,
+                GamepadAction::LeftStickUp => left_up = true,
+                GamepadAction::LeftStickDown => left_down = true,
+                GamepadAction::LeftStickLeft => left_left = true,
+                GamepadAction::LeftStickRight => left_right = true,
+                GamepadAction::RightStickUp => right_up = true,
+                GamepadAction::RightStickDown => right_down = true,
+                GamepadAction::RightStickLeft => right_left = true,
+                GamepadAction::RightStickRight => right_right = true,
                 GamepadAction::WalkModifier => walk_active = true,
             }
         }
 
-        let raw_lx: f64 = match (stick_left, stick_right) {
-            (true, false) => -1.0,
-            (false, true) => 1.0,
-            _ => 0.0,
-        };
-        let raw_ly: f64 = match (stick_up, stick_down) {
-            (true, false) => -1.0,
-            (false, true) => 1.0,
-            _ => 0.0,
-        };
-
-        let mag = raw_lx.hypot(raw_ly);
-        if mag > 0.0 {
-            let scale = if walk_active {
-                self.profile.walk_scale.clamp(0.0, 1.0)
-            } else {
-                1.0
-            };
-            let fx = (raw_lx / mag) * scale * STICK_MAX_F64;
-            let fy = (raw_ly / mag) * scale * STICK_MAX_F64;
-            let (lx, ly) = quantize_stick_axes(fx, fy);
-            state.left_x = lx;
-            state.left_y = ly;
-        }
+        let walk_scale = self.profile.walk_scale;
+        let key_left = compute_key_stick(
+            left_up,
+            left_down,
+            left_left,
+            left_right,
+            walk_active,
+            walk_scale,
+        );
+        let key_right = compute_key_stick(
+            right_up,
+            right_down,
+            right_left,
+            right_right,
+            walk_active,
+            walk_scale,
+        );
 
         state.hat_x = match (dpad_left, dpad_right) {
             (true, false) => -1,
@@ -166,7 +181,28 @@ impl InputMapper {
         state.lt = if lt_active { 255 } else { 0 };
         state.rt = if rt_active { 255 } else { 0 };
 
-        let (rx, ry) = self.mouse_stick.tick(dt_secs);
+        let mouse_axes = if self.profile.left_stick_mode == StickMode::Mouse
+            || self.profile.right_stick_mode == StickMode::Mouse
+        {
+            self.mouse_stick.tick(dt_secs)
+        } else {
+            self.mouse_stick.reset();
+            (0, 0)
+        };
+
+        let (lx, ly) = match self.profile.left_stick_mode {
+            StickMode::Mouse => mouse_axes,
+            StickMode::Keys => key_left,
+            StickMode::Disabled => (0, 0),
+        };
+        state.left_x = lx;
+        state.left_y = ly;
+
+        let (rx, ry) = match self.profile.right_stick_mode {
+            StickMode::Mouse => mouse_axes,
+            StickMode::Keys => key_right,
+            StickMode::Disabled => (0, 0),
+        };
         state.right_x = rx;
         state.right_y = ry;
 
@@ -178,6 +214,41 @@ impl InputMapper {
         self.pressed.clear();
         self.mouse_stick.reset();
     }
+}
+
+#[inline]
+fn compute_key_stick(
+    up: bool,
+    down: bool,
+    left: bool,
+    right: bool,
+    walk_active: bool,
+    walk_scale: f64,
+) -> (i16, i16) {
+    let raw_x: f64 = match (left, right) {
+        (true, false) => -1.0,
+        (false, true) => 1.0,
+        _ => 0.0,
+    };
+    let raw_y: f64 = match (up, down) {
+        (true, false) => -1.0,
+        (false, true) => 1.0,
+        _ => 0.0,
+    };
+
+    let mag = raw_x.hypot(raw_y);
+    if mag == 0.0 {
+        return (0, 0);
+    }
+
+    let scale = if walk_active {
+        walk_scale.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let fx = (raw_x / mag) * scale * STICK_MAX_F64;
+    let fy = (raw_y / mag) * scale * STICK_MAX_F64;
+    quantize_stick_axes(fx, fy)
 }
 
 #[cfg(test)]
@@ -308,5 +379,70 @@ mod tests {
         mapper.reset();
 
         assert_eq!(mapper.tick(0.004), GamepadState::default());
+    }
+
+    #[test]
+    fn mouse_on_left_stick_and_keys_on_right_stick() {
+        let mut profile = zelda_default();
+        profile.left_stick_mode = StickMode::Mouse;
+        profile.right_stick_mode = StickMode::Keys;
+        profile.set_binding(GamepadAction::RightStickUp, KeyCode::KEY_I);
+        profile.set_binding(GamepadAction::RightStickRight, KeyCode::KEY_L);
+
+        let mut mapper = InputMapper::new(profile, MouseStickEngine::new(MouseStickConfig::default()));
+        mapper.feed_mouse_delta(50.0, -25.0);
+        assert!(mapper.handle_key(KeyCode::KEY_I, true));
+        assert!(mapper.handle_key(KeyCode::KEY_L, true));
+        // WASD should be ignored on left stick since left_stick_mode is Mouse
+        assert!(mapper.handle_key(KeyCode::KEY_W, true));
+
+        let state = mapper.tick(0.004);
+        assert_ne!(state.left_x, 0);
+        assert!(state.left_y < 0);
+        assert_eq!(state.right_x, 23169);
+        assert_eq!(state.right_y, -23169);
+    }
+
+    #[test]
+    fn disabled_stick_modes_zero_axes_and_reset_mouse() {
+        let mut mapper = make_mapper();
+        mapper.feed_mouse_delta(50.0, 50.0);
+        let active = mapper.tick(0.004);
+        assert_ne!((active.right_x, active.right_y), (0, 0));
+
+        let mut disabled = zelda_default();
+        disabled.left_stick_mode = StickMode::Disabled;
+        disabled.right_stick_mode = StickMode::Disabled;
+        mapper.set_profile(disabled);
+
+        assert!(mapper.handle_key(KeyCode::KEY_W, true));
+        mapper.feed_mouse_delta(50.0, 50.0);
+        let state = mapper.tick(0.004);
+        assert_eq!(state.left_x, 0);
+        assert_eq!(state.left_y, 0);
+        assert_eq!(state.right_x, 0);
+        assert_eq!(state.right_y, 0);
+
+        // Re-enabling Mouse mode should start from a clean reset state (zeroed velocity)
+        let mut reenabled = zelda_default();
+        reenabled.right_stick_mode = StickMode::Mouse;
+        mapper.set_profile(reenabled);
+        let after_reenable = mapper.tick(0.004);
+        assert_eq!((after_reenable.right_x, after_reenable.right_y), (0, 0));
+    }
+
+    #[test]
+    fn set_mouse_config_updates_engine_live() {
+        let mut mapper = make_mapper();
+        let cfg = MouseStickConfig {
+            invert_y: true,
+            ..MouseStickConfig::default()
+        };
+        mapper.set_mouse_config(cfg);
+        assert_eq!(mapper.mouse_stick().config(), cfg);
+
+        mapper.feed_mouse_delta(0.0, 20.0);
+        let state = mapper.tick(0.004);
+        assert!(state.right_y < 0);
     }
 }

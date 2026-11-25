@@ -26,7 +26,7 @@ pub(crate) fn quantize_stick_axes(fx: f64, fy: f64) -> (i16, i16) {
 }
 
 /// Configuration parameters for [`MouseStickEngine`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MouseStickConfig {
     /// Target loop frequency in Hz (default: 250.0).
     pub hz: f64,
@@ -82,10 +82,15 @@ impl MouseStickEngine {
         }
     }
 
-    /// Returns the engine's configuration.
+    /// Returns a copy of the engine's configuration.
     #[must_use]
-    pub const fn config(&self) -> &MouseStickConfig {
-        &self.config
+    pub const fn config(&self) -> MouseStickConfig {
+        self.config
+    }
+
+    /// Updates the engine's configuration.
+    pub fn set_config(&mut self, config: MouseStickConfig) {
+        self.config = config;
     }
 
     /// Clears accumulated mouse deltas and internal velocity state.
