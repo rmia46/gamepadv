@@ -41,10 +41,22 @@ pub fn action_display_name(action: GamepadAction) -> &'static str {
 }
 
 fn binding_label(profile: &Profile, action: GamepadAction) -> String {
-    profile
-        .binding_for_action(action)
-        .map(format_keycode)
-        .unwrap_or_else(|| "---".to_string())
+    let keys = profile.bindings_for_action(action);
+    match keys.len() {
+        0 => "---".to_string(),
+        1 => format_keycode(keys[0]),
+        n => {
+            let first = format_keycode(keys[0]);
+            if n == 2 {
+                let second = format_keycode(keys[1]);
+                let joined = format!("{first}/{second}");
+                if joined.len() <= 11 {
+                    return joined;
+                }
+            }
+            format!("{first} +{}", n - 1)
+        }
+    }
 }
 
 /// Captures a key or mouse button press when `listening_for` is active.
@@ -128,7 +140,7 @@ pub fn handle_listening_input(
     }
 
     if let Some(code) = captured {
-        profile.set_binding(action, code);
+        profile.add_binding(action, code);
         *listening_for = None;
         return true;
     }
@@ -147,6 +159,17 @@ pub fn draw_controller(
     let mut changed = false;
 
     if let Some(action) = *listening_for {
+        let current_keys: Vec<String> = profile
+            .bindings_for_action(action)
+            .into_iter()
+            .map(format_keycode)
+            .collect();
+        let current_str = if current_keys.is_empty() {
+            "none".to_string()
+        } else {
+            current_keys.join(", ")
+        };
+
         egui::Frame::none()
             .fill(Color32::from_rgb(56, 44, 18))
             .stroke(Stroke::new(1.5_f32, Color32::from_rgb(245, 180, 50)))
@@ -157,13 +180,18 @@ pub fn draw_controller(
                     ui.colored_label(
                         Color32::from_rgb(255, 215, 90),
                         format!(
-                            "Listening for {} — press any key or mouse button (Esc to cancel)",
+                            "Adding binding for {} [current: {current_str}] — press key/mouse (Esc cancels)",
                             action_display_name(action)
                         ),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Cancel").clicked() {
                             *listening_for = None;
+                        }
+                        if !current_keys.is_empty() && ui.button("Clear All").clicked() {
+                            profile.clear_action_bindings(action);
+                            *listening_for = None;
+                            changed = true;
                         }
                     });
                 });

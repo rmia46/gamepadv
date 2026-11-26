@@ -25,6 +25,8 @@ pub struct GamepadVApp {
     show_save_as_modal: bool,
     save_as_name: String,
     saved_profiles: Vec<(String, PathBuf)>,
+    loaded_file_path: Option<PathBuf>,
+    confirmation_popup: Option<(String, String, bool)>,
     show_about_modal: bool,
     show_how_to_use_modal: bool,
     show_slider_guide_modal: bool,
@@ -50,6 +52,8 @@ impl GamepadVApp {
             show_save_as_modal: false,
             save_as_name: String::new(),
             saved_profiles,
+            loaded_file_path: None,
+            confirmation_popup: None,
             show_about_modal: false,
             show_how_to_use_modal: false,
             show_slider_guide_modal: false,
@@ -60,14 +64,44 @@ impl GamepadVApp {
         &mut self,
         profile: Profile,
         mouse_config: MouseStickConfig,
-        banner: String,
+        loaded_path: Option<PathBuf>,
+        popup_title: &str,
+        popup_msg: String,
     ) {
         self.profile = profile;
         self.mouse_config = mouse_config;
+        self.loaded_file_path = loaded_path;
         self.listening_for = None;
         self.engine.update_profile(self.profile.clone());
         self.engine.update_mouse_config(self.mouse_config);
-        self.status_banner = Some((banner, false));
+        self.status_banner = Some((popup_msg.clone(), false));
+        self.confirmation_popup = Some((popup_title.to_string(), popup_msg, false));
+    }
+
+    fn save_current_profile(&mut self) {
+        if let Some(path) = self.loaded_file_path.clone() {
+            let name = self.profile.name.clone();
+            self.save_profile_to(path, &format!("profile '{name}'"));
+            return;
+        }
+
+        // Never overwrite built-in presets; save modifications as the user's custom default.
+        if Profile::is_builtin_preset_name(&self.profile.name) {
+            self.profile.name = format!("{} (Custom)", self.profile.name);
+            self.engine.update_profile(self.profile.clone());
+        }
+
+        match ProfileConfig::default_config_path() {
+            Some(path) => {
+                let name = self.profile.name.clone();
+                self.save_profile_to(path, &format!("custom default '{name}'"));
+            }
+            None => {
+                let msg = "Could not resolve config directory.".to_string();
+                self.status_banner = Some((msg.clone(), true));
+                self.confirmation_popup = Some(("Save Failed".to_string(), msg, true));
+            }
+        }
     }
 
     fn save_profile_to(&mut self, path: PathBuf, label: &str) {
@@ -75,10 +109,17 @@ impl GamepadVApp {
         match cfg.save_to_file(&path) {
             Ok(()) => {
                 self.saved_profiles = ProfileConfig::list_saved_profiles();
-                self.status_banner = Some((format!("Saved {label}: {}", path.display()), false));
+                let msg = format!(
+                    "Saved {label} to:\n{}\n\nBuilt-in presets remain untouched and can be restored anytime from the Profiles menu.",
+                    path.display()
+                );
+                self.status_banner = Some((format!("Saved {label}"), false));
+                self.confirmation_popup = Some(("Profile Saved".to_string(), msg, false));
             }
             Err(err) => {
-                self.status_banner = Some((format!("Save failed: {err}"), true));
+                let msg = format!("Save failed: {err}");
+                self.status_banner = Some((msg.clone(), true));
+                self.confirmation_popup = Some(("Save Failed".to_string(), msg, true));
             }
         }
     }
@@ -88,10 +129,19 @@ impl GamepadVApp {
             Ok(cfg) => {
                 let (p, m) = cfg.into_parts();
                 let name = p.name.clone();
-                self.apply_loaded_profile(p, m, format!("Loaded profile: {name}"));
+                let msg = format!("Loaded profile '{name}' from:\n{}", path.display());
+                self.apply_loaded_profile(
+                    p,
+                    m,
+                    Some(path.to_path_buf()),
+                    "Profile Loaded",
+                    msg,
+                );
             }
             Err(err) => {
-                self.status_banner = Some((format!("Failed to load profile: {err}"), true));
+                let msg = format!("Failed to load profile: {err}");
+                self.status_banner = Some((msg.clone(), true));
+                self.confirmation_popup = Some(("Load Failed".to_string(), msg, true));
             }
         }
     }
@@ -144,10 +194,8 @@ impl eframe::App for GamepadVApp {
             .show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("File", |ui| {
-                        if ui.button("Save Default Profile").clicked() {
-                            if let Some(path) = ProfileConfig::default_config_path() {
-                                self.save_profile_to(path, "default profile");
-                            }
+                        if ui.button("Save Profile").clicked() {
+                            self.save_current_profile();
                             ui.close_menu();
                         }
                         if ui.button("Save Profile As...").clicked() {
@@ -158,7 +206,7 @@ impl eframe::App for GamepadVApp {
                         ui.menu_button("Load Saved Profile", |ui| {
                             if let Some(def_path) = ProfileConfig::default_config_path() {
                                 if def_path.exists()
-                                    && ui.button("Default (profile.json)").clicked()
+                                    && ui.button("Custom Default (profile.json)").clicked()
                                 {
                                     self.load_profile_from(&def_path);
                                     ui.close_menu();
@@ -181,11 +229,13 @@ impl eframe::App for GamepadVApp {
                             }
                         });
                         ui.separator();
-                        if ui.button("Reset to Default").clicked() {
+                        if ui.button("Reset to Built-in Default").clicked() {
                             self.apply_loaded_profile(
                                 default_3d_action(),
                                 MouseStickConfig::default(),
-                                "Reset to 3D Action (Default)".to_string(),
+                                None,
+                                "Built-in Default Restored",
+                                "Restored built-in '3D Action (Default)' profile.".to_string(),
                             );
                             ui.close_menu();
                         }
@@ -202,7 +252,9 @@ impl eframe::App for GamepadVApp {
                                 self.apply_loaded_profile(
                                     preset_profile,
                                     preset_mouse,
-                                    format!("Loaded preset: {label}"),
+                                    None,
+                                    "Built-in Preset Loaded",
+                                    format!("Loaded built-in preset '{label}'."),
                                 );
                                 ui.close_menu();
                             }
@@ -475,13 +527,19 @@ impl eframe::App for GamepadVApp {
                             );
 
                             ui.add_space(4.0);
-                            let walk_key = self
+                            let walk_keys: Vec<String> = self
                                 .profile
-                                .binding_for_action(GamepadAction::WalkModifier)
+                                .bindings_for_action(GamepadAction::WalkModifier)
+                                .into_iter()
                                 .map(keymap::format_keycode)
-                                .unwrap_or_else(|| "---".to_string());
+                                .collect();
+                            let walk_label = if walk_keys.is_empty() {
+                                "---".to_string()
+                            } else {
+                                walk_keys.join(" / ")
+                            };
                             if ui
-                                .button(format!("Walk Modifier: {walk_key}"))
+                                .button(format!("Walk Modifier: {walk_label}"))
                                 .clicked()
                             {
                                 self.listening_for = Some(GamepadAction::WalkModifier);
@@ -491,15 +549,20 @@ impl eframe::App for GamepadVApp {
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 if ui.button("Save").clicked() {
-                                    if let Some(path) = ProfileConfig::default_config_path() {
-                                        self.save_profile_to(path, "default profile");
-                                    }
+                                    self.save_current_profile();
+                                }
+                                if ui.button("Save As...").clicked() {
+                                    self.save_as_name = self.profile.name.clone();
+                                    self.show_save_as_modal = true;
                                 }
                                 if ui.button("Reset Default").clicked() {
                                     self.apply_loaded_profile(
                                         default_3d_action(),
                                         MouseStickConfig::default(),
-                                        "Restored 3D Action (Default)".to_string(),
+                                        None,
+                                        "Built-in Default Restored",
+                                        "Restored built-in '3D Action (Default)' profile."
+                                            .to_string(),
                                     );
                                 }
                             });
@@ -532,8 +595,10 @@ impl eframe::App for GamepadVApp {
                         if ui.button("Save").clicked() {
                             let name = self.save_as_name.trim().to_string();
                             if !name.is_empty() {
-                                self.profile.name = name.clone();
                                 if let Some(path) = ProfileConfig::profile_path_for_name(&name) {
+                                    self.profile.name = name.clone();
+                                    self.loaded_file_path = Some(path.clone());
+                                    self.engine.update_profile(self.profile.clone());
                                     self.save_profile_to(path, &format!("profile '{name}'"));
                                 }
                                 self.show_save_as_modal = false;
@@ -541,6 +606,35 @@ impl eframe::App for GamepadVApp {
                         }
                         if ui.button("Cancel").clicked() {
                             self.show_save_as_modal = false;
+                        }
+                    });
+                });
+        }
+
+        // Profile Action Confirmation Popup
+        if let Some((title, message, is_err)) = self.confirmation_popup.clone() {
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(420.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    theme::card_frame().show(ui, |ui| {
+                        let color = if is_err {
+                            theme::ACCENT_RED
+                        } else {
+                            theme::ACCENT_GREEN
+                        };
+                        ui.label(egui::RichText::new(&message).size(13.5).color(color));
+                    });
+                    ui.add_space(8.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("OK").clicked()
+                            || ctx.input(|i| {
+                                i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)
+                            })
+                        {
+                            self.confirmation_popup = None;
                         }
                     });
                 });
@@ -646,20 +740,20 @@ impl eframe::App for GamepadVApp {
                     .inner_margin(egui::Margin::same(14.0)),
             )
             .show(ctx, |ui| {
-                let mut profile_changed = controller_view::handle_listening_input(
-                    ui,
-                    &mut self.profile,
-                    &mut self.listening_for,
-                    &mut self.just_started_listening,
-                    &mut self.prev_modifiers,
-                );
-
-                profile_changed |= controller_view::draw_controller(
+                let mut profile_changed = controller_view::draw_controller(
                     ui,
                     &mut self.profile,
                     &snap.latest_state,
                     &mut self.listening_for,
                     &mut self.just_started_listening,
+                );
+
+                profile_changed |= controller_view::handle_listening_input(
+                    ui,
+                    &mut self.profile,
+                    &mut self.listening_for,
+                    &mut self.just_started_listening,
+                    &mut self.prev_modifiers,
                 );
 
                 if profile_changed {

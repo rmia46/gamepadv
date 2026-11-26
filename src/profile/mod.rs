@@ -85,7 +85,7 @@ impl Profile {
         }
     }
 
-    /// Returns the [`KeyCode`] bound to `action`, if any.
+    /// Returns the first [`KeyCode`] bound to `action`, if any.
     #[must_use]
     pub fn binding_for_action(&self, action: GamepadAction) -> Option<KeyCode> {
         self.bindings
@@ -94,10 +94,45 @@ impl Profile {
             .min_by_key(|key| key.code())
     }
 
-    /// Binds `action` to `key`, removing any previous key bound to `action`.
+    /// Returns all [`KeyCode`]s bound to `action`, sorted deterministically.
+    #[must_use]
+    pub fn bindings_for_action(&self, action: GamepadAction) -> Vec<KeyCode> {
+        let mut keys: Vec<KeyCode> = self
+            .bindings
+            .iter()
+            .filter_map(|(&key, &act)| (act == action).then_some(key))
+            .collect();
+        keys.sort_by_key(|key| key.code());
+        keys
+    }
+
+    /// Replaces any existing bindings for `action` with a single binding to `key`.
     pub fn set_binding(&mut self, action: GamepadAction, key: KeyCode) {
         self.bindings.retain(|_, &mut act| act != action);
         self.bindings.insert(key, action);
+    }
+
+    /// Adds `key` as a binding for `action` without removing other keys bound to `action`.
+    pub fn add_binding(&mut self, action: GamepadAction, key: KeyCode) {
+        self.bindings.insert(key, action);
+    }
+
+    /// Removes a specific `key` binding if present.
+    pub fn remove_binding(&mut self, key: KeyCode) -> bool {
+        self.bindings.remove(&key).is_some()
+    }
+
+    /// Clears all keys bound to `action`.
+    pub fn clear_action_bindings(&mut self, action: GamepadAction) {
+        self.bindings.retain(|_, &mut act| act != action);
+    }
+
+    /// Returns `true` if `name` matches one of the immutable built-in presets.
+    #[must_use]
+    pub fn is_builtin_preset_name(name: &str) -> bool {
+        builtin_presets()
+            .iter()
+            .any(|(_, p, _)| p.name == name)
     }
 }
 
@@ -402,5 +437,24 @@ mod tests {
             key_display_name(KeyCode::KEY_CAPSLOCK),
             format!("{:?}", KeyCode::KEY_CAPSLOCK)
         );
+    }
+
+    #[test]
+    fn multi_button_add_and_clear_bindings_work() {
+        let mut profile = default_3d_action();
+        profile.add_binding(GamepadAction::South, KeyCode::KEY_G);
+        let keys = profile.bindings_for_action(GamepadAction::South);
+        assert_eq!(keys, vec![KeyCode::KEY_E, KeyCode::KEY_G]);
+
+        profile.clear_action_bindings(GamepadAction::South);
+        assert!(profile.bindings_for_action(GamepadAction::South).is_empty());
+    }
+
+    #[test]
+    fn builtin_preset_names_are_detected() {
+        assert!(Profile::is_builtin_preset_name("3D Action (Default)"));
+        assert!(Profile::is_builtin_preset_name("FPS / Shooter"));
+        assert!(!Profile::is_builtin_preset_name("3D Action (Default) (Custom)"));
+        assert!(!Profile::is_builtin_preset_name("My Custom Profile"));
     }
 }
