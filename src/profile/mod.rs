@@ -1,3 +1,4 @@
+pub mod presets;
 pub mod zelda_default;
 
 use std::collections::HashMap;
@@ -8,6 +9,7 @@ use evdev::KeyCode;
 
 use crate::engine::mouse_stick::MouseStickConfig;
 
+pub use presets::builtin_presets;
 pub use zelda_default::zelda_default;
 
 /// Input source mode for an analog stick.
@@ -173,6 +175,58 @@ impl ProfileConfig {
     /// (`$XDG_CONFIG_HOME/gamepadv/profile.json` or `$HOME/.config/gamepadv/profile.json`).
     #[must_use]
     pub fn default_config_path() -> Option<PathBuf> {
+        Self::config_root_dir().map(|dir| dir.join("profile.json"))
+    }
+
+    /// Returns the directory for named saved profiles (`<config_root>/profiles/`).
+    #[must_use]
+    pub fn profiles_dir() -> Option<PathBuf> {
+        Self::config_root_dir().map(|dir| dir.join("profiles"))
+    }
+
+    /// Returns a sanitized `.json` path inside `profiles_dir()` for `name`.
+    #[must_use]
+    pub fn profile_path_for_name(name: &str) -> Option<PathBuf> {
+        let slug: String = name
+            .trim()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if slug.is_empty() {
+            return None;
+        }
+        Self::profiles_dir().map(|dir| dir.join(format!("{slug}.json")))
+    }
+
+    /// Lists saved `.json` profiles in `profiles_dir()`, sorted by name.
+    #[must_use]
+    pub fn list_saved_profiles() -> Vec<(String, PathBuf)> {
+        let Some(dir) = Self::profiles_dir() else {
+            return Vec::new();
+        };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    out.push((stem.to_string(), path));
+                }
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    fn config_root_dir() -> Option<PathBuf> {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
@@ -181,7 +235,7 @@ impl ProfileConfig {
                     .filter(|v| !v.is_empty())
                     .map(|home| PathBuf::from(home).join(".config"))
             })?;
-        Some(base.join("gamepadv").join("profile.json"))
+        Some(base.join("gamepadv"))
     }
 }
 
