@@ -1,8 +1,27 @@
-![GamepadV Banner](docs/banner.jpg)
+<p align="center">
+  <img src="docs/banner.jpg" alt="GamepadV Banner" width="680" />
+</p>
 
 # GamepadV
 
-Zero-config Linux virtual Xbox 360 gamepad (`uinput`) driven by your keyboard and mouse, engineered for low-latency, jitter-free mouse-to-right-stick lookaround in emulators (Cemu, Dolphin, Yuzu/Ryujinx, RPCS3) and PC/Proton games. Works on both **X11 and Wayland**.
+**Play controller-only and emulated games on Linux using just your keyboard and mouse—no physical controller required.**
+
+### The Problem
+On Linux, playing games or emulators like **Cemu** (*Zelda: BotW / TotK*), **Dolphin**, **RPCS3**, or **Proton/Steam** titles without a physical gamepad is frustrating:
+- Built-in keyboard bindings don't let you use your **mouse for smooth 3D camera lookaround**.
+- General remappers require tedious manual tuning for mouse-to-analog-stick deadzones, smoothing, and cursor locking.
+
+### What GamepadV Does
+**GamepadV** creates a real virtual **Xbox 360 controller** (`uinput`) underneath your keyboard and mouse. Games and emulators detect it as genuine plug-and-play controller hardware—while you get:
+- **Smooth Mouse → Stick Lookaround**: 250Hz+ loop with anti-deadzone compensation, EMA velocity smoothing, and exponential decay (no jitter or deadzone snapping).
+- **Smooth Keyboard Stick Sweeps**: Optional press-duration ramping and arc-blended turns for `WASD`.
+- **Interactive Visual GUI**: Click any button to bind one or multiple keys, or switch either stick to **`Mouse`** in one click.
+- **Works on X11 & Wayland**: Locks your cursor (`EVIOCGRAB`) when active (`F8`) and passes through `Alt+Tab` and unmapped keys.
+- **Safe Permissions**: Uses a `pkexec` split-daemon so your normal user session never needs global `/dev/input/event*` access.
+
+<p align="center">
+  <img src="docs/demo.gif" alt="GamepadV Demo" width="760" />
+</p>
 
 ---
 
@@ -32,7 +51,7 @@ Works on **Arch Linux, Ubuntu, Debian, Fedora, SteamOS, openSUSE**, and more (in
 
 ## Usage
 1. Launch **`gamepadv`** (from your app menu or terminal).
-2. Click **`Unlock Input Engine (pkexec)`** and enter your password *(keeps `/dev/input/event*` isolated from your normal user session; see [docs/udev-setup.md](docs/udev-setup.md) for permanent `udev` setup)*.
+2. Click **`Unlock Input Engine (pkexec)`** and enter your password *(see [docs/udev-setup.md](docs/udev-setup.md) for permanent `udev` setup)*.
 3. **Start your game/emulator after unlocking** so it detects the virtual Xbox 360 controller (`Microsoft X-Box 360 pad`).
 4. Press **`F8`** (or click **`|| PAUSED (F8)`**) to toggle capture:
    - **`|| PAUSED (F8)`** — Cursor is free for menus/desktop; live GUI preview still works.
@@ -40,20 +59,11 @@ Works on **Arch Linux, Ubuntu, Debian, Fedora, SteamOS, openSUSE**, and more (in
 
 ---
 
-## Features
-- **Interactive Visual Xbox 360 GUI (`eframe` / `egui`)**:
-  - Click any button, trigger, D-pad, or stick direction to bind a keyboard key or mouse button.
-  - One-click **`Mouse` | `Keys` | `Off`** mode selector on both **Left Stick** and **Right Stick**.
-  - Live stick deflection, button highlights, and **Input Check** monitor.
-  - Real-time sliders for **Mouse Stick Tuning** (Sensitivity, Anti-Deadzone, Smoothing EMA, Decay Half-Life, Invert Y) and **Key Stick Sweep** (anti-deadzone-aware ease-out + arc-blended turns).
-  - Built-in presets (**3D Action**, **FPS / Shooter**, **Racing / Driving**, **2D Platformer**) and custom profile save/load (`~/.config/gamepadv/profiles/`).
-- **Virtual Xbox 360 Controller (`uinput`)**: Emulates `Microsoft X-Box 360 pad` (`0x045e:0x028e`) on a dedicated 250Hz+ thread decoupled from UI rendering.
-- **Cursor Lock + Unmapped Key Passthrough**: Uses `EVIOCGRAB` when active while forwarding unmapped keys (e.g., `Alt+Tab`).
-- **Built-in "3D Action (Default)" Profile**:
-  - `WASD` → Left Stick (`Left Alt` / `Left Ctrl` = Walk modifier)
-  - `Mouse` → Right Stick
-  - `Left Click` / `Right Click` → `X` (Attack) / `LT` (Aim / Shield)
-  - `Space` / `Left Shift` / `E` / `Q` → `Y` (Jump) / `B` (Back / Sprint) / `A` (Confirm / Interact) / `RT`
-  - `F` / `R` → `LB` / `RB`
-  - `1`–`4` → D-Pad
-  - `Tab` / `Enter` / `C` / `V` → `Select` / `Start` / `L3` / `R3`
+## Default Controls ("3D Action (Default)")
+- `WASD` → Left Stick (`Left Alt` / `Left Ctrl` = Walk modifier)
+- `Mouse` → Right Stick
+- `Left Click` / `Right Click` → `X` / `LT`
+- `Space` / `Left Shift` / `E` / `Q` → `Y` / `B` / `A` / `RT`
+- `F` / `R` → `LB` / `RB`
+- `1`–`4` → D-Pad
+- `Tab` / `Enter` / `C` / `V` → `Select` / `Start` / `L3` / `R3`
