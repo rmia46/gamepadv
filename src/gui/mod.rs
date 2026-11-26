@@ -25,6 +25,8 @@ pub struct GamepadVApp {
     save_as_name: String,
     saved_profiles: Vec<(String, PathBuf)>,
     show_about_modal: bool,
+    show_how_to_use_modal: bool,
+    show_slider_guide_modal: bool,
 }
 
 impl GamepadVApp {
@@ -48,6 +50,8 @@ impl GamepadVApp {
             save_as_name: String::new(),
             saved_profiles,
             show_about_modal: false,
+            show_how_to_use_modal: false,
+            show_slider_guide_modal: false,
         }
     }
 
@@ -227,6 +231,17 @@ impl eframe::App for GamepadVApp {
                         ui.separator();
                         if ui.button("About / Permissions").clicked() {
                             self.show_about_modal = true;
+                            ui.close_menu();
+                        }
+                    });
+
+                    ui.menu_button("Help", |ui| {
+                        if ui.button("How to Use").clicked() {
+                            self.show_how_to_use_modal = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("Slider & Tuning Guide").clicked() {
+                            self.show_slider_guide_modal = true;
                             ui.close_menu();
                         }
                     });
@@ -554,6 +569,64 @@ impl eframe::App for GamepadVApp {
                     ui.add_space(8.0);
                     if ui.button("Close").clicked() {
                         self.show_about_modal = false;
+                    }
+                });
+        }
+
+        // Help: How to Use Modal
+        if self.show_how_to_use_modal {
+            egui::Window::new("How to Use GamepadV")
+                .collapsible(false)
+                .resizable(false)
+                .default_width(480.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.heading("Quick Start");
+                    ui.add_space(4.0);
+                    ui.label("1. Unlock Input: If prompted, click 'Unlock Input Engine (pkexec)' and enter your password.");
+                    ui.label("2. Launch Your Game: Start your emulator or Steam/Proton game AFTER GamepadV is unlocked so the virtual Xbox 360 pad is detected.");
+                    ui.label("3. Toggle Active (F8): Switch to your game and press F8 (or click the top-left toggle) to lock your cursor and send inputs.");
+                    ui.label("4. Pause Anytime (F8): Press F8 again to release your cursor for menus or desktop use.");
+
+                    ui.add_space(10.0);
+                    ui.heading("Mapping Controls");
+                    ui.add_space(4.0);
+                    ui.label("• Rebind Any Button: Click any button, trigger, D-Pad, or stick key pill, then press any key or mouse button (Esc cancels).");
+                    ui.label("• Mouse to Stick: Use the 'Mouse | Keys | Off' selector on Left Stick or Right Stick to route raw mouse movement directly to that stick.");
+                    ui.label("• Profiles: Use the 'Profiles' menu for built-in presets, or 'File -> Save Profile As...' to save your own.");
+
+                    ui.add_space(10.0);
+                    if ui.button("Close").clicked() {
+                        self.show_how_to_use_modal = false;
+                    }
+                });
+        }
+
+        // Help: Slider & Tuning Guide Modal
+        if self.show_slider_guide_modal {
+            egui::Window::new("Slider & Tuning Guide")
+                .collapsible(false)
+                .resizable(false)
+                .default_width(500.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.heading("Mouse Stick Tuning");
+                    ui.add_space(4.0);
+                    ui.label("• Sensitivity: Scales mouse speed to stick deflection. Higher = faster camera turns.");
+                    ui.label("• Anti-Deadzone: Minimum stick output for tiny mouse moves so slow aiming isn't swallowed by a game's inner deadzone (0.14 - 0.20 works well).");
+                    ui.label("• Smoothing (EMA): Blends mouse velocity. 1.00 = raw/instant; lower values (0.30 - 0.50) reduce micro-jitter.");
+                    ui.label("• Decay Half-Life (ms): How fast the stick returns to center when the mouse stops. Prevents 125Hz packet-gap stutter.");
+                    ui.label("• Invert Y: Flips vertical look direction.");
+
+                    ui.add_space(10.0);
+                    ui.heading("Key Stick Sweep (WASD)");
+                    ui.add_space(4.0);
+                    ui.label("• Sweep Time (ms): Time for keyboard movement to sweep smoothly past the deadzone to full tilt. Set 0 ms for instant 2D platformer snaps, or 70 - 110 ms for smooth 3D/racing motion.");
+                    ui.label("• Release Decay (ms): How quickly the stick returns to center when keys are released (keep around 25 - 40 ms for crisp stops).");
+
+                    ui.add_space(10.0);
+                    if ui.button("Close").clicked() {
+                        self.show_slider_guide_modal = false;
                     }
                 });
         }
