@@ -11,6 +11,11 @@ Zero-config Linux virtual Xbox 360 gamepad (`uinput`) driven by your keyboard an
 curl -fsSL https://raw.githubusercontent.com/rmia46/gamepadv/feature/gamepadv-core/install.sh | bash
 ```
 
+### Arch Linux (`.pkg.tar.zst`)
+```bash
+curl -fsSLO https://github.com/rmia46/gamepadv/releases/latest/download/gamepadv-0.1.0-1-x86_64.pkg.tar.zst && sudo pacman -U --noconfirm ./gamepadv-0.1.0-1-x86_64.pkg.tar.zst
+```
+
 ### Debian / Ubuntu / Linux Mint (`.deb`)
 ```bash
 curl -fsSLO https://github.com/rmia46/gamepadv/releases/latest/download/gamepadv_0.1.0_amd64.deb && sudo apt install -y ./gamepadv_0.1.0_amd64.deb

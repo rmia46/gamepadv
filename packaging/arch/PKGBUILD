@@ -1,0 +1,24 @@
+# Maintainer: rmia46 <rmia46@users.noreply.github.com>
+pkgname=gamepadv
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Zero-config Linux virtual Xbox 360 gamepad driven by keyboard and mouse"
+arch=('x86_64')
+url="https://github.com/rmia46/gamepadv"
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'polkit')
+makedepends=('cargo' 'git')
+source=("gamepadv-${pkgver}.tar.gz::https://github.com/rmia46/gamepadv/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "${srcdir}/${pkgname}-${pkgver}"
+    export CARGO_TARGET_DIR=target
+    cargo build --release --locked
+}
+
+package() {
+    cd "${srcdir}/${pkgname}-${pkgver}"
+    install -Dm755 "target/release/gamepadv" "${pkgdir}/usr/bin/gamepadv"
+    install -Dm644 "packaging/gamepadv.desktop" "${pkgdir}/usr/share/applications/gamepadv.desktop"
+}
