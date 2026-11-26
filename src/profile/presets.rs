@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use evdev::KeyCode;
 
 use crate::engine::MouseStickConfig;
-use crate::profile::{zelda_default, GamepadAction, Profile, StickMode};
+use crate::profile::{default_3d_action, GamepadAction, Profile, StickMode};
 
 /// Returns all built-in game presets as `(label, Profile, MouseStickConfig)`.
 #[must_use]
 pub fn builtin_presets() -> Vec<(&'static str, Profile, MouseStickConfig)> {
     vec![
         (
-            "3D Action / Zelda (Default)",
-            zelda_default(),
+            "3D Action (Default)",
+            default_3d_action(),
             MouseStickConfig::default(),
         ),
         fps_shooter(),

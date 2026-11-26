@@ -274,10 +274,10 @@ fn compute_key_stick_target(
 mod tests {
     use super::*;
     use crate::engine::mouse_stick::{MouseStickConfig, STICK_MAX_F64};
-    use crate::profile::zelda_default;
+    use crate::profile::default_3d_action;
 
     fn make_mapper() -> InputMapper {
-        let mut profile = zelda_default();
+        let mut profile = default_3d_action();
         profile.key_stick.sweep_ms = 0.0;
         profile.key_stick.release_ms = 0.0;
         InputMapper::new(profile, MouseStickEngine::new(MouseStickConfig::default()))
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn mouse_on_left_stick_and_keys_on_right_stick() {
-        let mut profile = zelda_default();
+        let mut profile = default_3d_action();
         profile.left_stick_mode = StickMode::Mouse;
         profile.right_stick_mode = StickMode::Keys;
         profile.key_stick.sweep_ms = 0.0;
@@ -433,7 +433,7 @@ mod tests {
         let active = mapper.tick(0.004);
         assert_ne!((active.right_x, active.right_y), (0, 0));
 
-        let mut disabled = zelda_default();
+        let mut disabled = default_3d_action();
         disabled.left_stick_mode = StickMode::Disabled;
         disabled.right_stick_mode = StickMode::Disabled;
         mapper.set_profile(disabled);
@@ -447,7 +447,7 @@ mod tests {
         assert_eq!(state.right_y, 0);
 
         // Re-enabling Mouse mode should start from a clean reset state (zeroed velocity)
-        let mut reenabled = zelda_default();
+        let mut reenabled = default_3d_action();
         reenabled.right_stick_mode = StickMode::Mouse;
         mapper.set_profile(reenabled);
         let after_reenable = mapper.tick(0.004);

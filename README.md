@@ -11,7 +11,7 @@ Zero-config Linux virtual Xbox 360 gamepad (`uinput`) driven by your keyboard an
 - **Virtual Xbox 360 Controller (`uinput`)**: Emulates `Microsoft X-Box 360 pad` (`0x045e:0x028e`) on a dedicated 250Hz+ background thread decoupled from UI rendering.
 - **Cursor Lock + Unmapped Key Passthrough**: Uses `EVIOCGRAB` when active so the cursor stays locked in-game while forwarding unmapped keys (e.g., `Alt+Tab`).
 - **Instant Toggle (`F8`)**: Pause/resume capture at any time; closing the window or pressing `Ctrl+C` always ungrabs cleanly.
-- **Built-in "3D Action / Zelda" Profile**:
+- **Built-in "3D Action (Default)" Profile**:
   - `WASD` → Left Stick (`Left Alt` / `Left Ctrl` = Walk modifier)
   - `Mouse` → Right Stick
   - `Left Click` / `Right Click` → `X` (West / Attack) / `LT` (Shield / Target)

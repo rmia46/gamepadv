@@ -1,5 +1,5 @@
+pub mod action_default;
 pub mod presets;
-pub mod zelda_default;
 
 use std::collections::HashMap;
 use std::io;
@@ -10,8 +10,8 @@ use evdev::KeyCode;
 use crate::engine::key_stick::KeyStickConfig;
 use crate::engine::mouse_stick::MouseStickConfig;
 
+pub use action_default::default_3d_action;
 pub use presets::builtin_presets;
-pub use zelda_default::zelda_default;
 
 /// Input source mode for an analog stick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn profile_config_json_round_trip() {
-        let mut profile = zelda_default();
+        let mut profile = default_3d_action();
         profile.left_stick_mode = StickMode::Mouse;
         profile.right_stick_mode = StickMode::Keys;
         profile.set_binding(GamepadAction::RightStickUp, KeyCode::KEY_I);
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn profile_config_save_and_load_file() {
-        let profile = zelda_default();
+        let profile = default_3d_action();
         let mouse = MouseStickConfig::default();
         let config = ProfileConfig::from_parts(&profile, &mouse);
 
@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn set_binding_replaces_prior_binding_for_action() {
-        let mut profile = zelda_default();
+        let mut profile = default_3d_action();
         assert_eq!(
             profile.binding_for_action(GamepadAction::South),
             Some(KeyCode::KEY_E)

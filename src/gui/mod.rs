@@ -7,7 +7,7 @@ use std::time::Duration;
 use eframe::egui::{self, Color32, Rounding, Stroke};
 
 use crate::engine::MouseStickConfig;
-use crate::profile::{builtin_presets, zelda_default, GamepadAction, Profile, ProfileConfig};
+use crate::profile::{builtin_presets, default_3d_action, GamepadAction, Profile, ProfileConfig};
 use crate::runtime::{EngineHandle, EngineSnapshot};
 
 /// Main `eframe` application state for GamepadV.
@@ -175,11 +175,11 @@ impl eframe::App for GamepadVApp {
                             }
                         });
                         ui.separator();
-                        if ui.button("Reset to Zelda Default").clicked() {
+                        if ui.button("Reset to Default").clicked() {
                             self.apply_loaded_profile(
-                                zelda_default(),
+                                default_3d_action(),
                                 MouseStickConfig::default(),
-                                "Reset to Zelda Default".to_string(),
+                                "Reset to 3D Action (Default)".to_string(),
                             );
                             ui.close_menu();
                         }
@@ -483,14 +483,14 @@ impl eframe::App for GamepadVApp {
                         }
                     }
 
-                    if ui.button("Reset Zelda Default").clicked() {
-                        self.profile = zelda_default();
+                    if ui.button("Reset Default").clicked() {
+                        self.profile = default_3d_action();
                         self.mouse_config = MouseStickConfig::default();
                         self.listening_for = None;
                         self.engine.update_profile(self.profile.clone());
                         self.engine.update_mouse_config(self.mouse_config);
                         self.status_banner =
-                            Some(("Restored zelda_default profile".to_string(), false));
+                            Some(("Restored 3D Action (Default) profile".to_string(), false));
                     }
                 });
 

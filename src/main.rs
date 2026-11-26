@@ -6,7 +6,7 @@ use std::time::Duration;
 use gamepadv::engine::MouseStickConfig;
 use gamepadv::gui::run_gui;
 use gamepadv::input::{probe_input_devices, DeviceClass};
-use gamepadv::profile::{zelda_default, ProfileConfig};
+use gamepadv::profile::{default_3d_action, ProfileConfig};
 use gamepadv::runtime::{run_daemon_socket, run_monitor, EngineHandle};
 use gamepadv::virtual_pad::VirtualXbox360;
 
@@ -254,7 +254,7 @@ fn main() {
         .filter(|p| p.exists())
         .and_then(|p| ProfileConfig::load_from_file(&p).ok())
         .map(ProfileConfig::into_parts)
-        .unwrap_or_else(|| (zelda_default(), MouseStickConfig::default()));
+        .unwrap_or_else(|| (default_3d_action(), MouseStickConfig::default()));
 
     if let Some(sens) = opts.sensitivity {
         mouse_config.sensitivity = sens;

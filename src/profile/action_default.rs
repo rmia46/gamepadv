@@ -4,9 +4,9 @@ use evdev::KeyCode;
 use super::{GamepadAction, Profile, StickMode};
 use crate::engine::KeyStickConfig;
 
-/// Returns the default 3D Action / Zelda profile.
+/// Returns the default generic 3D Action profile.
 #[must_use]
-pub fn zelda_default() -> Profile {
+pub fn default_3d_action() -> Profile {
     let mut bindings = HashMap::new();
 
     // Left stick (WASD)
@@ -42,7 +42,7 @@ pub fn zelda_default() -> Profile {
     bindings.insert(KeyCode::KEY_V, GamepadAction::RightThumb);
 
     Profile {
-        name: "zelda_default".to_string(),
+        name: "3D Action (Default)".to_string(),
         toggle_key: KeyCode::KEY_F8,
         bindings,
         walk_scale: 0.5,
@@ -57,16 +57,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zelda_default_has_expected_toggle_and_walk_scale() {
-        let profile = zelda_default();
-        assert_eq!(profile.name, "zelda_default");
+    fn default_3d_action_has_expected_toggle_and_walk_scale() {
+        let profile = default_3d_action();
+        assert_eq!(profile.name, "3D Action (Default)");
         assert_eq!(profile.toggle_key, KeyCode::KEY_F8);
         assert!((profile.walk_scale - 0.5).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn zelda_default_contains_all_expected_bindings() {
-        let profile = zelda_default();
+    fn default_3d_action_contains_all_expected_bindings() {
+        let profile = default_3d_action();
         let expected = [
             (KeyCode::KEY_W, GamepadAction::LeftStickUp),
             (KeyCode::KEY_S, GamepadAction::LeftStickDown),

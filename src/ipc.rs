@@ -133,7 +133,7 @@ pub fn to_profile_config(profile: &Profile, mouse: &MouseStickConfig) -> Profile
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::zelda_default;
+    use crate::profile::default_3d_action;
 
     #[test]
     fn ipc_command_and_snapshot_round_trip() {
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(snap.latest_state.right_x, 12345);
 
         // Also verify ProfileConfig serialization inside IpcCommand.
-        let cfg = to_profile_config(&zelda_default(), &MouseStickConfig::default());
+        let cfg = to_profile_config(&default_3d_action(), &MouseStickConfig::default());
         let json = serde_json::to_string(&IpcCommand::UpdateProfile(cfg)).unwrap();
         let decoded: IpcCommand = serde_json::from_str(&json).unwrap();
         assert!(matches!(decoded, IpcCommand::UpdateProfile(_)));
