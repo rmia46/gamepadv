@@ -7,7 +7,7 @@ Zero-config Linux virtual Xbox 360 gamepad (`uinput`) driven by your keyboard an
 ## Quick Install (All Linux Distros — `x86_64`)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rmia46/gamepadv/feature/gamepadv-core/install.sh | bash
+curl -fsSL https://github.com/rmia46/gamepadv/releases/latest/download/install.sh | bash
 ```
 
 Works on **Arch Linux, Ubuntu, Debian, Fedora, SteamOS, openSUSE**, and more (installs `gamepadv` + app launcher entry).

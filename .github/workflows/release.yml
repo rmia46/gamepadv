@@ -52,7 +52,8 @@ jobs:
           EOF
           dpkg-deb --build stage-deb "dist/gamepadv_${VERSION}_amd64.deb"
 
-          # 3. Checksums
+          # 3. Installer & Checksums
+          cp install.sh dist/
           (cd dist && sha256sum * > SHA256SUMS.txt)
 
       - name: Upload GitHub Release assets
