@@ -294,14 +294,15 @@ impl eframe::App for GamepadVApp {
                             .fill(Color32::from_rgb(30, 34, 44))
                             .stroke(Stroke::new(1.0_f32, Color32::from_rgb(60, 68, 84)))
                             .rounding(Rounding::same(5.0))
-                            .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+                            .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new(format!(
                                         "Input Check | Key: {key_text} | Mouse: ({dx:+}, {dy:+})"
                                     ))
-                                    .small()
-                                    .color(Color32::from_rgb(190, 215, 240)),
+                                    .size(14.5)
+                                    .strong()
+                                    .color(Color32::from_rgb(200, 225, 250)),
                                 );
                             });
                     });
