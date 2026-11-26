@@ -2,8 +2,6 @@
 set -euo pipefail
 
 REPO="rmia46/gamepadv"
-INSTALL_DIR="${HOME}/.local/bin"
-DESKTOP_DIR="${HOME}/.local/share/applications"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
@@ -23,14 +21,19 @@ fi
 curl -fsSL "${TARBALL_URL}" -o "${TMP_DIR}/gamepadv.tar.gz"
 tar -xzf "${TMP_DIR}/gamepadv.tar.gz" -C "${TMP_DIR}"
 
-mkdir -p "${INSTALL_DIR}" "${DESKTOP_DIR}"
-install -m 755 "${TMP_DIR}/gamepadv" "${INSTALL_DIR}/gamepadv"
-if [[ -f "${TMP_DIR}/gamepadv.desktop" ]]; then
-  install -m 644 "${TMP_DIR}/gamepadv.desktop" "${DESKTOP_DIR}/gamepadv.desktop"
+if command -v sudo >/dev/null 2>&1; then
+  sudo install -Dm755 "${TMP_DIR}/gamepadv" "/usr/local/bin/gamepadv"
+  if [[ -f "${TMP_DIR}/gamepadv.desktop" ]]; then
+    sudo install -Dm644 "${TMP_DIR}/gamepadv.desktop" "/usr/share/applications/gamepadv.desktop"
+  fi
+  echo "==> Installed to /usr/local/bin/gamepadv"
+else
+  mkdir -p "${HOME}/.local/bin" "${HOME}/.local/share/applications"
+  install -m 755 "${TMP_DIR}/gamepadv" "${HOME}/.local/bin/gamepadv"
+  if [[ -f "${TMP_DIR}/gamepadv.desktop" ]]; then
+    install -m 644 "${TMP_DIR}/gamepadv.desktop" "${HOME}/.local/share/applications/gamepadv.desktop"
+  fi
+  echo "==> Installed to ${HOME}/.local/bin/gamepadv"
 fi
 
-echo "==> Installed to ${INSTALL_DIR}/gamepadv"
-if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
-  echo "Note: Add ${INSTALL_DIR} to your PATH (e.g. export PATH=\"\$HOME/.local/bin:\$PATH\")."
-fi
-echo "==> Done! Run 'gamepadv' to launch."
+echo "==> Done! Launch 'gamepadv' from your app menu or terminal."

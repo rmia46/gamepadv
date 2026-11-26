@@ -4,32 +4,27 @@ Zero-config Linux virtual Xbox 360 gamepad (`uinput`) driven by your keyboard an
 
 ---
 
-## Quick Install (Linux x86_64)
+## Quick Install (All Linux Distros — `x86_64`)
 
-### One-Line Install (Any Distro — Arch, SteamOS, Fedora, Ubuntu)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rmia46/gamepadv/feature/gamepadv-core/install.sh | bash
 ```
 
-### Arch Linux (`.pkg.tar.zst`)
-```bash
-curl -fsSLO https://github.com/rmia46/gamepadv/releases/latest/download/gamepadv-0.1.0-1-x86_64.pkg.tar.zst && sudo pacman -U --noconfirm ./gamepadv-0.1.0-1-x86_64.pkg.tar.zst
-```
+Works on **Arch Linux, Ubuntu, Debian, Fedora, SteamOS, openSUSE**, and more (installs `gamepadv` + app launcher entry).
 
-### Debian / Ubuntu / Linux Mint (`.deb`)
-```bash
-curl -fsSLO https://github.com/rmia46/gamepadv/releases/latest/download/gamepadv_0.1.0_amd64.deb && sudo apt install -y ./gamepadv_0.1.0_amd64.deb
-```
+<details>
+<summary>Manual Package Downloads (.pkg.tar.zst, .deb, .rpm, source)</summary>
 
-### Fedora / RHEL / openSUSE (`.rpm`)
-```bash
-sudo dnf install -y https://github.com/rmia46/gamepadv/releases/latest/download/gamepadv-0.1.0-1.x86_64.rpm
-```
+- **Arch Linux**: `gamepadv-0.1.0-1-x86_64.pkg.tar.zst` (`sudo pacman -U ...`)
+- **Debian / Ubuntu / Mint**: `gamepadv_0.1.0_amd64.deb` (`sudo apt install ./gamepadv_0.1.0_amd64.deb`)
+- **Fedora / RHEL / openSUSE**: `gamepadv-0.1.0-1.x86_64.rpm` (`sudo dnf install ...`)
+- **All Packages**: [GitHub Releases](https://github.com/rmia46/gamepadv/releases/latest)
+- **Build from Source**:
+  ```bash
+  git clone https://github.com/rmia46/gamepadv.git && cd gamepadv && cargo build --release
+  ```
 
-### Build from Source
-```bash
-git clone https://github.com/rmia46/gamepadv.git && cd gamepadv && cargo build --release
-```
+</details>
 
 ---
 
