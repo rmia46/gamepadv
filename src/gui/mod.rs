@@ -1,5 +1,6 @@
 pub mod controller_view;
 pub mod keymap;
+pub mod theme;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -115,7 +116,7 @@ pub fn run_gui(
         "GamepadV",
         options,
         Box::new(move |cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            theme::apply_modern_theme(&cc.egui_ctx);
             Ok(Box::new(GamepadVApp::new(
                 profile,
                 mouse_config,
@@ -132,12 +133,13 @@ impl eframe::App for GamepadVApp {
         }
         let snap = self.last_snapshot.clone();
 
-        // App Menu Bar: File | Profiles | Settings
+        // App Menu Bar: File | Profiles | Settings | Help
         egui::TopBottomPanel::top("menu_bar")
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(15, 17, 22))
-                    .inner_margin(egui::Margin::symmetric(10.0, 4.0)),
+                    .fill(theme::BG_CANVAS)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                    .inner_margin(egui::Margin::symmetric(12.0, 5.0)),
             )
             .show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
@@ -252,8 +254,9 @@ impl eframe::App for GamepadVApp {
         egui::TopBottomPanel::top("top_bar")
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(20, 23, 29))
-                    .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
+                    .fill(theme::BG_PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                    .inner_margin(egui::Margin::symmetric(16.0, 12.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -360,165 +363,159 @@ impl eframe::App for GamepadVApp {
         // Right Panel: Mouse DSP Tuning & Profile Management
         if self.show_tuning_panel {
             egui::SidePanel::right("tuning_panel")
-            .resizable(false)
-            .default_width(290.0)
-            .frame(
-                egui::Frame::none()
-                    .fill(Color32::from_rgb(20, 23, 29))
-                    .inner_margin(egui::Margin::same(14.0)),
-            )
-            .show(ctx, |ui| {
-                ui.heading("Mouse Stick Tuning");
-                ui.add_space(6.0);
+                .resizable(false)
+                .default_width(308.0)
+                .frame(
+                    egui::Frame::none()
+                        .fill(theme::BG_PANEL)
+                        .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                        .inner_margin(egui::Margin::same(12.0)),
+                )
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        theme::card_frame().show(ui, |ui| {
+                            theme::section_header(ui, "Mouse Stick Tuning");
 
-                let mut mouse_changed = false;
+                            let mut mouse_changed = false;
 
-                ui.label("Sensitivity");
-                mouse_changed |= ui
-                    .add(
-                        egui::Slider::new(&mut self.mouse_config.sensitivity, 0.0001..=0.0030)
-                            .fixed_decimals(4),
-                    )
-                    .changed();
+                            ui.label("Sensitivity");
+                            mouse_changed |= ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut self.mouse_config.sensitivity,
+                                        0.0001..=0.0030,
+                                    )
+                                    .fixed_decimals(4),
+                                )
+                                .changed();
 
-                ui.add_space(4.0);
-                ui.label("Anti-Deadzone");
-                mouse_changed |= ui
-                    .add(
-                        egui::Slider::new(&mut self.mouse_config.anti_deadzone, 0.0..=0.50)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
+                            ui.label("Anti-Deadzone");
+                            mouse_changed |= ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut self.mouse_config.anti_deadzone,
+                                        0.0..=0.50,
+                                    )
+                                    .fixed_decimals(2),
+                                )
+                                .changed();
 
-                ui.add_space(4.0);
-                ui.label("Smoothing (EMA)");
-                mouse_changed |= ui
-                    .add(
-                        egui::Slider::new(&mut self.mouse_config.ema_alpha, 0.05..=1.0)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
+                            ui.label("Smoothing (EMA)");
+                            mouse_changed |= ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut self.mouse_config.ema_alpha,
+                                        0.05..=1.0,
+                                    )
+                                    .fixed_decimals(2),
+                                )
+                                .changed();
 
-                ui.add_space(4.0);
-                ui.label("Decay Half-Life (ms)");
-                mouse_changed |= ui
-                    .add(
-                        egui::Slider::new(&mut self.mouse_config.decay_half_life_ms, 4.0..=60.0)
-                            .fixed_decimals(1),
-                    )
-                    .changed();
+                            ui.label("Decay Half-Life (ms)");
+                            mouse_changed |= ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut self.mouse_config.decay_half_life_ms,
+                                        4.0..=60.0,
+                                    )
+                                    .fixed_decimals(1),
+                                )
+                                .changed();
 
-                ui.add_space(6.0);
-                mouse_changed |= ui
-                    .checkbox(&mut self.mouse_config.invert_y, "Invert Y")
-                    .changed();
+                            mouse_changed |= ui
+                                .checkbox(&mut self.mouse_config.invert_y, "Invert Y")
+                                .changed();
 
-                if mouse_changed {
-                    self.engine.update_mouse_config(self.mouse_config);
-                }
+                            if mouse_changed {
+                                self.engine.update_mouse_config(self.mouse_config);
+                            }
+                        });
 
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(8.0);
-                ui.heading("Key Stick Sweep");
-                ui.add_space(4.0);
+                        ui.add_space(10.0);
 
-                let mut key_stick_changed = false;
-                ui.label("Sweep Time (ms, 0 = instant)");
-                key_stick_changed |= ui
-                    .add(
-                        egui::Slider::new(&mut self.profile.key_stick.sweep_ms, 0.0..=200.0)
-                            .fixed_decimals(0),
-                    )
-                    .changed();
+                        theme::card_frame().show(ui, |ui| {
+                            theme::section_header(ui, "Key Stick Sweep");
 
-                ui.add_space(4.0);
-                ui.label("Release Decay (ms)");
-                key_stick_changed |= ui
-                    .add(
-                        egui::Slider::new(&mut self.profile.key_stick.release_ms, 0.0..=100.0)
-                            .fixed_decimals(0),
-                    )
-                    .changed();
+                            let mut key_stick_changed = false;
+                            ui.label("Sweep Time (ms, 0 = instant)");
+                            key_stick_changed |= ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut self.profile.key_stick.sweep_ms,
+                                        0.0..=200.0,
+                                    )
+                                    .fixed_decimals(0),
+                                )
+                                .changed();
 
-                if key_stick_changed {
-                    self.engine.update_profile(self.profile.clone());
-                }
+                            ui.label("Release Decay (ms)");
+                            key_stick_changed |= ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut self.profile.key_stick.release_ms,
+                                        0.0..=100.0,
+                                    )
+                                    .fixed_decimals(0),
+                                )
+                                .changed();
 
-                ui.add_space(14.0);
-                ui.separator();
-                ui.add_space(10.0);
+                            if key_stick_changed {
+                                self.engine.update_profile(self.profile.clone());
+                            }
+                        });
 
-                ui.heading("Profile");
-                ui.add_space(4.0);
-                ui.label(format!("Active: {}", self.profile.name));
+                        ui.add_space(10.0);
 
-                ui.add_space(6.0);
-                let walk_key = self
-                    .profile
-                    .binding_for_action(GamepadAction::WalkModifier)
-                    .map(keymap::format_keycode)
-                    .unwrap_or_else(|| "---".to_string());
-                if ui
-                    .button(format!("Walk Modifier: {walk_key}"))
-                    .clicked()
-                {
-                    self.listening_for = Some(GamepadAction::WalkModifier);
-                    self.just_started_listening = true;
-                }
+                        theme::card_frame().show(ui, |ui| {
+                            theme::section_header(ui, "Active Profile");
+                            ui.label(
+                                egui::RichText::new(&self.profile.name)
+                                    .strong()
+                                    .color(theme::TEXT_PRIMARY),
+                            );
 
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Save Profile").clicked() {
-                        match ProfileConfig::default_config_path() {
-                            Some(path) => {
-                                let cfg = ProfileConfig::from_parts(
-                                    &self.profile,
-                                    &self.mouse_config,
-                                );
-                                match cfg.save_to_file(&path) {
-                                    Ok(()) => {
-                                        self.status_banner = Some((
-                                            format!("Saved to {}", path.display()),
-                                            false,
-                                        ));
-                                    }
-                                    Err(err) => {
-                                        self.status_banner =
-                                            Some((format!("Save failed: {err}"), true));
+                            ui.add_space(4.0);
+                            let walk_key = self
+                                .profile
+                                .binding_for_action(GamepadAction::WalkModifier)
+                                .map(keymap::format_keycode)
+                                .unwrap_or_else(|| "---".to_string());
+                            if ui
+                                .button(format!("Walk Modifier: {walk_key}"))
+                                .clicked()
+                            {
+                                self.listening_for = Some(GamepadAction::WalkModifier);
+                                self.just_started_listening = true;
+                            }
+
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                if ui.button("Save").clicked() {
+                                    if let Some(path) = ProfileConfig::default_config_path() {
+                                        self.save_profile_to(path, "default profile");
                                     }
                                 }
-                            }
-                            None => {
-                                self.status_banner = Some((
-                                    "Could not resolve config path".to_string(),
-                                    true,
-                                ));
-                            }
+                                if ui.button("Reset Default").clicked() {
+                                    self.apply_loaded_profile(
+                                        default_3d_action(),
+                                        MouseStickConfig::default(),
+                                        "Restored 3D Action (Default)".to_string(),
+                                    );
+                                }
+                            });
+                        });
+
+                        if let Some((msg, is_err)) = &self.status_banner {
+                            ui.add_space(8.0);
+                            let color = if *is_err {
+                                Color32::from_rgb(245, 110, 110)
+                            } else {
+                                theme::ACCENT_GREEN
+                            };
+                            ui.colored_label(color, msg);
                         }
-                    }
-
-                    if ui.button("Reset Default").clicked() {
-                        self.profile = default_3d_action();
-                        self.mouse_config = MouseStickConfig::default();
-                        self.listening_for = None;
-                        self.engine.update_profile(self.profile.clone());
-                        self.engine.update_mouse_config(self.mouse_config);
-                        self.status_banner =
-                            Some(("Restored 3D Action (Default) profile".to_string(), false));
-                    }
+                    });
                 });
-
-                if let Some((msg, is_err)) = &self.status_banner {
-                    ui.add_space(8.0);
-                    let color = if *is_err {
-                        Color32::from_rgb(245, 110, 110)
-                    } else {
-                        Color32::from_rgb(120, 215, 145)
-                    };
-                    ui.colored_label(color, msg);
-                }
-            });
         }
 
         // Save Profile As Modal
@@ -578,27 +575,32 @@ impl eframe::App for GamepadVApp {
             egui::Window::new("How to Use GamepadV")
                 .collapsible(false)
                 .resizable(false)
-                .default_width(480.0)
+                .default_width(510.0)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.heading("Quick Start");
-                    ui.add_space(4.0);
-                    ui.label("1. Unlock Input: If prompted, click 'Unlock Input Engine (pkexec)' and enter your password.");
-                    ui.label("2. Launch Your Game: Start your emulator or Steam/Proton game AFTER GamepadV is unlocked so the virtual Xbox 360 pad is detected.");
-                    ui.label("3. Toggle Active (F8): Switch to your game and press F8 (or click the top-left toggle) to lock your cursor and send inputs.");
-                    ui.label("4. Pause Anytime (F8): Press F8 again to release your cursor for menus or desktop use.");
+                    theme::card_frame().show(ui, |ui| {
+                        theme::section_header(ui, "Quick Start");
+                        theme::guide_row(ui, "1. Unlock", "Click 'Unlock Input Engine (pkexec)' and enter your password.", theme::ACCENT_BLUE);
+                        theme::guide_row(ui, "2. Launch Game", "Start your emulator or Steam/Proton game AFTER unlocking so it sees the virtual pad.", theme::ACCENT_BLUE);
+                        theme::guide_row(ui, "3. Play (F8)", "Switch to your game and press F8 to lock your cursor and send Xbox 360 inputs.", theme::ACCENT_GREEN);
+                        theme::guide_row(ui, "4. Pause (F8)", "Press F8 again anytime to release your cursor for menus or desktop use.", theme::ACCENT_AMBER);
+                    });
+
+                    ui.add_space(8.0);
+
+                    theme::card_frame().show(ui, |ui| {
+                        theme::section_header(ui, "Mapping & Profiles");
+                        theme::guide_row(ui, "Rebind", "Click any button, trigger, D-Pad, or stick key pill, then press a key or mouse button (Esc cancels).", theme::ACCENT_BLUE);
+                        theme::guide_row(ui, "Mouse Stick", "Use 'Mouse | Keys | Off' on Left or Right Stick to route raw mouse movement to that stick.", theme::ACCENT_BLUE);
+                        theme::guide_row(ui, "Profiles", "Pick built-in presets in 'Profiles', or save custom ones via 'File -> Save Profile As...'.", theme::ACCENT_BLUE);
+                    });
 
                     ui.add_space(10.0);
-                    ui.heading("Mapping Controls");
-                    ui.add_space(4.0);
-                    ui.label("• Rebind Any Button: Click any button, trigger, D-Pad, or stick key pill, then press any key or mouse button (Esc cancels).");
-                    ui.label("• Mouse to Stick: Use the 'Mouse | Keys | Off' selector on Left Stick or Right Stick to route raw mouse movement directly to that stick.");
-                    ui.label("• Profiles: Use the 'Profiles' menu for built-in presets, or 'File -> Save Profile As...' to save your own.");
-
-                    ui.add_space(10.0);
-                    if ui.button("Close").clicked() {
-                        self.show_how_to_use_modal = false;
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Close").clicked() || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.show_how_to_use_modal = false;
+                        }
+                    });
                 });
         }
 
@@ -607,27 +609,32 @@ impl eframe::App for GamepadVApp {
             egui::Window::new("Slider & Tuning Guide")
                 .collapsible(false)
                 .resizable(false)
-                .default_width(500.0)
+                .default_width(530.0)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.heading("Mouse Stick Tuning");
-                    ui.add_space(4.0);
-                    ui.label("• Sensitivity: Scales mouse speed to stick deflection. Higher = faster camera turns.");
-                    ui.label("• Anti-Deadzone: Minimum stick output for tiny mouse moves so slow aiming isn't swallowed by a game's inner deadzone (0.14 - 0.20 works well).");
-                    ui.label("• Smoothing (EMA): Blends mouse velocity. 1.00 = raw/instant; lower values (0.30 - 0.50) reduce micro-jitter.");
-                    ui.label("• Decay Half-Life (ms): How fast the stick returns to center when the mouse stops. Prevents 125Hz packet-gap stutter.");
-                    ui.label("• Invert Y: Flips vertical look direction.");
+                    theme::card_frame().show(ui, |ui| {
+                        theme::section_header(ui, "Mouse Stick Tuning");
+                        theme::guide_row(ui, "Sensitivity", "Scales mouse speed to stick deflection. Higher = faster camera turns.", theme::ACCENT_BLUE);
+                        theme::guide_row(ui, "Anti-Deadzone", "Minimum stick output for tiny moves so slow aiming bypasses game deadzones (0.14 - 0.20).", theme::ACCENT_BLUE);
+                        theme::guide_row(ui, "Smoothing", "Blends mouse velocity. 1.00 = raw/instant; 0.30 - 0.50 reduces micro-jitter.", theme::ACCENT_BLUE);
+                        theme::guide_row(ui, "Decay", "How fast the stick centers when mouse stops. Prevents 125Hz packet-gap stutter.", theme::ACCENT_BLUE);
+                        theme::guide_row(ui, "Invert Y", "Flips vertical look direction.", theme::ACCENT_BLUE);
+                    });
+
+                    ui.add_space(8.0);
+
+                    theme::card_frame().show(ui, |ui| {
+                        theme::section_header(ui, "Key Stick Sweep (WASD)");
+                        theme::guide_row(ui, "Sweep Time", "Time to sweep smoothly past deadzone to full tilt (0 ms = instant 2D snap; 70 - 110 ms = smooth 3D/racing).", theme::ACCENT_GREEN);
+                        theme::guide_row(ui, "Release Decay", "How quickly the stick returns to center on key release (25 - 40 ms for crisp stops).", theme::ACCENT_GREEN);
+                    });
 
                     ui.add_space(10.0);
-                    ui.heading("Key Stick Sweep (WASD)");
-                    ui.add_space(4.0);
-                    ui.label("• Sweep Time (ms): Time for keyboard movement to sweep smoothly past the deadzone to full tilt. Set 0 ms for instant 2D platformer snaps, or 70 - 110 ms for smooth 3D/racing motion.");
-                    ui.label("• Release Decay (ms): How quickly the stick returns to center when keys are released (keep around 25 - 40 ms for crisp stops).");
-
-                    ui.add_space(10.0);
-                    if ui.button("Close").clicked() {
-                        self.show_slider_guide_modal = false;
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Close").clicked() || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.show_slider_guide_modal = false;
+                        }
+                    });
                 });
         }
 
