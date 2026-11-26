@@ -7,7 +7,7 @@ use crate::engine::mouse_stick::{
 use crate::profile::{GamepadAction, Profile, StickMode};
 
 /// Complete snapshot of the virtual Xbox 360 gamepad state for a single tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct GamepadState {
     pub left_x: i16,
     pub left_y: i16,

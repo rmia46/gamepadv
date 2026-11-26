@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,12 +7,16 @@ use gamepadv::engine::MouseStickConfig;
 use gamepadv::gui::run_gui;
 use gamepadv::input::{probe_input_devices, DeviceClass};
 use gamepadv::profile::{zelda_default, ProfileConfig};
-use gamepadv::runtime::EngineHandle;
+use gamepadv::runtime::{run_daemon_socket, EngineHandle};
 use gamepadv::virtual_pad::VirtualXbox360;
 
 struct CliOptions {
     check_only: bool,
     headless: bool,
+    daemon: bool,
+    socket: Option<PathBuf>,
+    owner_uid: Option<u32>,
+    owner_gid: Option<u32>,
     start_paused: Option<bool>,
     sensitivity: Option<f64>,
     anti_deadzone: Option<f64>,
@@ -30,10 +35,20 @@ fn parse_finite_f64(flag: &str, raw: Option<String>) -> Result<f64, String> {
     Ok(parsed)
 }
 
+fn parse_u32(flag: &str, raw: Option<String>) -> Result<u32, String> {
+    let val = raw.ok_or_else(|| format!("{flag} requires an integer value"))?;
+    val.parse::<u32>()
+        .map_err(|_| format!("invalid {flag} value: {val}"))
+}
+
 fn parse_args() -> Result<CliOptions, String> {
     let mut opts = CliOptions {
         check_only: false,
         headless: false,
+        daemon: false,
+        socket: None,
+        owner_uid: None,
+        owner_gid: None,
         start_paused: None,
         sensitivity: None,
         anti_deadzone: None,
@@ -50,6 +65,15 @@ fn parse_args() -> Result<CliOptions, String> {
             }
             "--check" => opts.check_only = true,
             "--headless" => opts.headless = true,
+            "--daemon" => opts.daemon = true,
+            "--socket" => {
+                let val = args
+                    .next()
+                    .ok_or_else(|| "--socket requires a path".to_string())?;
+                opts.socket = Some(PathBuf::from(val));
+            }
+            "--owner-uid" => opts.owner_uid = Some(parse_u32("--owner-uid", args.next())?),
+            "--owner-gid" => opts.owner_gid = Some(parse_u32("--owner-gid", args.next())?),
             "--start-paused" => opts.start_paused = Some(true),
             "--start-active" => opts.start_paused = Some(false),
             "--invert-y" => opts.invert_y = true,
@@ -90,6 +114,8 @@ USAGE:
 
 OPTIONS:
     --headless            Run in terminal-only daemon mode (no GUI window)
+    --daemon              Run as Unix-socket IPC daemon (used with --socket / pkexec)
+    --socket <PATH>       Unix socket path for --daemon mode
     --check               Probe /dev/uinput and /dev/input/event* permissions and exit
     --start-paused        Start paused (default in GUI mode; press F8 to enable capture)
     --start-active        Start active immediately (default in --headless mode)
@@ -148,7 +174,7 @@ fn run_check() -> i32 {
 
     if report.event_nodes_readable == 0 && report.event_nodes_permission_denied > 0 {
         eprintln!(
-            "[WARN] Cannot read /dev/input/event* (permission denied). See docs/udev-setup.md to grant input access."
+            "[WARN] Cannot read /dev/input/event* (permission denied). Use 'Unlock Input Engine (pkexec)' in the GUI or see docs/udev-setup.md."
         );
         return 2;
     }
@@ -234,6 +260,25 @@ fn main() {
     }
     if opts.invert_y {
         mouse_config.invert_y = true;
+    }
+
+    if opts.daemon {
+        let Some(socket_path) = opts.socket else {
+            eprintln!("Error: --daemon requires --socket <PATH>");
+            std::process::exit(2);
+        };
+        let owner = match (opts.owner_uid, opts.owner_gid) {
+            (Some(u), Some(g)) => Some((u, g)),
+            _ => None,
+        };
+        let start_paused = opts.start_paused.unwrap_or(true);
+        if let Err(err) =
+            run_daemon_socket(&socket_path, owner, profile, mouse_config, start_paused)
+        {
+            eprintln!("Daemon error: {err}");
+            std::process::exit(1);
+        }
+        return;
     }
 
     if opts.headless {

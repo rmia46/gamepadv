@@ -97,7 +97,13 @@ impl eframe::App for GamepadVApp {
                     .fill(toggle_fill)
                     .min_size(egui::vec2(170.0, 34.0));
 
-                    if ui.add(toggle_btn).clicked() {
+                    if ui
+                        .add_enabled(
+                            snap.permission_error.is_none() && !snap.unlocking,
+                            toggle_btn,
+                        )
+                        .clicked()
+                    {
                         self.engine.set_active(!snap.active);
                     }
 
@@ -126,12 +132,28 @@ impl eframe::App for GamepadVApp {
                         .rounding(Rounding::same(6.0))
                         .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                         .show(ui, |ui| {
-                            ui.colored_label(
-                                Color32::from_rgb(255, 190, 190),
-                                format!(
-                                    "Permission error: {err} — Check docs/udev-setup.md to grant /dev/input and /dev/uinput access."
-                                ),
-                            );
+                            ui.horizontal_wrapped(|ui| {
+                                ui.colored_label(
+                                    Color32::from_rgb(255, 190, 190),
+                                    format!("Permission error: {err}"),
+                                );
+                                ui.add_space(10.0);
+                                let unlock_label = if snap.unlocking {
+                                    "Authorizing..."
+                                } else {
+                                    "Unlock Input Engine (pkexec)"
+                                };
+                                let unlock_btn = egui::Button::new(
+                                    egui::RichText::new(unlock_label)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(46, 115, 185));
+                                if ui.add_enabled(!snap.unlocking, unlock_btn).clicked() {
+                                    self.engine
+                                        .unlock_with_pkexec(self.profile.clone(), self.mouse_config);
+                                }
+                            });
                         });
                 }
             });
@@ -299,10 +321,10 @@ impl eframe::App for GamepadVApp {
                 }
             });
 
-        if snap.active || self.listening_for.is_some() {
+        if snap.active || snap.unlocking || self.listening_for.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         } else {
-            ctx.request_repaint_after(Duration::from_millis(100));
+            ctx.request_repaint_after(Duration::from_millis(150));
         }
     }
 }

@@ -1,5 +1,8 @@
 use std::collections::HashSet;
-use std::io::ErrorKind;
+use std::io::{self, BufReader, ErrorKind};
+use std::os::unix::net::UnixStream;
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -9,7 +12,11 @@ use evdev::{Device, EventSummary, KeyCode, RelativeAxisCode};
 
 use crate::engine::{GamepadState, InputMapper, MouseStickConfig, MouseStickEngine};
 use crate::input::{probe_input_devices, InputRig};
-use crate::profile::Profile;
+use crate::ipc::{
+    bind_restricted_socket, current_uid_gid, default_socket_path, read_json_line,
+    write_json_line, IpcCommand, IpcSnapshot,
+};
+use crate::profile::{Profile, ProfileConfig};
 use crate::virtual_pad::VirtualXbox360;
 
 const SPIN_MARGIN: Duration = Duration::from_micros(750);
@@ -18,6 +25,7 @@ const SPIN_MARGIN: Duration = Duration::from_micros(750);
 #[derive(Debug, Clone)]
 pub struct EngineSnapshot {
     pub active: bool,
+    pub unlocking: bool,
     pub latest_state: GamepadState,
     pub keyboard_count: usize,
     pub mouse_count: usize,
@@ -28,6 +36,7 @@ pub struct EngineSnapshot {
 #[derive(Debug)]
 struct EngineShared {
     active: bool,
+    unlocking: bool,
     requested_active: bool,
     latest_state: GamepadState,
     keyboard_count: usize,
@@ -36,26 +45,28 @@ struct EngineShared {
     permission_error: Option<String>,
     pending_profile: Option<Profile>,
     pending_mouse_config: Option<MouseStickConfig>,
+    latest_profile: Profile,
+    latest_mouse_config: MouseStickConfig,
 }
 
-/// Handle to the dedicated high-frequency `evdev` + `uinput` background thread.
+/// Handle to the dedicated high-frequency `evdev` + `uinput` engine (either in-process
+/// or connected via Unix-socket IPC to a `pkexec`-elevated `--daemon` child).
 pub struct EngineHandle {
     running: Arc<AtomicBool>,
     shared: Arc<Mutex<EngineShared>>,
     join_handle: Option<JoinHandle<()>>,
+    ipc_writer: Arc<Mutex<Option<UnixStream>>>,
+    pkexec_child: Arc<Mutex<Option<Child>>>,
 }
 
 impl EngineHandle {
-    /// Spawns the 250Hz+ input/uinput engine thread.
-    ///
-    /// If `/dev/input/event*` permissions are missing or `/dev/uinput` fails,
-    /// the thread records the error in `permission_error` / `status_message`
-    /// without panicking so the GUI can display actionable guidance.
+    /// Spawns the 250Hz+ input/uinput engine thread in-process.
     pub fn spawn(profile: Profile, mouse_config: MouseStickConfig, start_paused: bool) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let initial_active = !start_paused;
         let shared = Arc::new(Mutex::new(EngineShared {
             active: false,
+            unlocking: false,
             requested_active: initial_active,
             latest_state: GamepadState::default(),
             keyboard_count: 0,
@@ -64,6 +75,8 @@ impl EngineHandle {
             permission_error: None,
             pending_profile: None,
             pending_mouse_config: None,
+            latest_profile: profile.clone(),
+            latest_mouse_config: mouse_config,
         }));
 
         let r_flag = Arc::clone(&running);
@@ -78,7 +91,39 @@ impl EngineHandle {
             running,
             shared,
             join_handle,
+            ipc_writer: Arc::new(Mutex::new(None)),
+            pkexec_child: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Launches a privileged `gamepadv --daemon` via `pkexec` and connects over a
+    /// user-restricted (`0600`) Unix socket so the GUI stays unprivileged.
+    pub fn unlock_with_pkexec(&mut self, profile: Profile, mouse_config: MouseStickConfig) {
+        self.shutdown();
+
+        self.running = Arc::new(AtomicBool::new(true));
+        {
+            let mut guard = self.shared.lock().expect("engine mutex poisoned");
+            guard.active = false;
+            guard.requested_active = false;
+            guard.unlocking = true;
+            guard.permission_error = None;
+            guard.status_message = "Waiting for pkexec authorization...".to_string();
+            guard.latest_profile = profile.clone();
+            guard.latest_mouse_config = mouse_config;
+        }
+
+        let r_flag = Arc::clone(&self.running);
+        let s_ref = Arc::clone(&self.shared);
+        let writer_ref = Arc::clone(&self.ipc_writer);
+        let child_ref = Arc::clone(&self.pkexec_child);
+
+        self.join_handle = thread::Builder::new()
+            .name("gamepadv-ipc-client".to_string())
+            .spawn(move || {
+                run_pkexec_ipc_client(r_flag, s_ref, writer_ref, child_ref, profile, mouse_config)
+            })
+            .ok();
     }
 
     /// Returns the latest snapshot of engine status and virtual gamepad state.
@@ -86,6 +131,7 @@ impl EngineHandle {
         let guard = self.shared.lock().expect("engine mutex poisoned");
         EngineSnapshot {
             active: guard.active,
+            unlocking: guard.unlocking,
             latest_state: guard.latest_state,
             keyboard_count: guard.keyboard_count,
             mouse_count: guard.mouse_count,
@@ -94,29 +140,59 @@ impl EngineHandle {
         }
     }
 
-    /// Requests the engine thread to activate or pause capture (`EVIOCGRAB`).
+    /// Requests the engine to activate or pause capture (`EVIOCGRAB`).
     pub fn set_active(&self, active: bool) {
+        if let Some(stream) = self.ipc_writer.lock().expect("ipc mutex poisoned").as_mut() {
+            let _ = write_json_line(stream, &IpcCommand::SetActive(active));
+            return;
+        }
         let mut guard = self.shared.lock().expect("engine mutex poisoned");
         guard.requested_active = active;
     }
 
-    /// Sends an updated profile to the engine thread (applied on the next tick).
+    /// Sends an updated profile to the engine.
     pub fn update_profile(&self, profile: Profile) {
-        let mut guard = self.shared.lock().expect("engine mutex poisoned");
-        guard.pending_profile = Some(profile);
+        let cfg = {
+            let mut guard = self.shared.lock().expect("engine mutex poisoned");
+            guard.latest_profile = profile.clone();
+            guard.pending_profile = Some(profile.clone());
+            ProfileConfig::from_parts(&profile, &guard.latest_mouse_config)
+        };
+        if let Some(stream) = self.ipc_writer.lock().expect("ipc mutex poisoned").as_mut() {
+            let _ = write_json_line(stream, &IpcCommand::UpdateProfile(cfg));
+        }
     }
 
-    /// Sends an updated mouse DSP configuration to the engine thread.
+    /// Sends an updated mouse DSP configuration to the engine.
     pub fn update_mouse_config(&self, config: MouseStickConfig) {
-        let mut guard = self.shared.lock().expect("engine mutex poisoned");
-        guard.pending_mouse_config = Some(config);
+        let cfg = {
+            let mut guard = self.shared.lock().expect("engine mutex poisoned");
+            guard.latest_mouse_config = config;
+            guard.pending_mouse_config = Some(config);
+            ProfileConfig::from_parts(&guard.latest_profile, &config)
+        };
+        if let Some(stream) = self.ipc_writer.lock().expect("ipc mutex poisoned").as_mut() {
+            let _ = write_json_line(stream, &IpcCommand::UpdateProfile(cfg));
+        }
     }
 
-    /// Signals the background thread to exit cleanly and waits for it to ungrab.
+    /// Signals the engine (or remote daemon) to exit cleanly and ungrab all devices.
     pub fn shutdown(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        if let Some(stream) = self
+            .ipc_writer
+            .lock()
+            .expect("ipc mutex poisoned")
+            .take()
+            .as_mut()
+        {
+            let _ = write_json_line(stream, &IpcCommand::Shutdown);
+        }
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
+        }
+        if let Some(mut child) = self.pkexec_child.lock().expect("child mutex poisoned").take() {
+            let _ = child.wait();
         }
     }
 }
@@ -125,6 +201,228 @@ impl Drop for EngineHandle {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+fn run_pkexec_ipc_client(
+    running: Arc<AtomicBool>,
+    shared: Arc<Mutex<EngineShared>>,
+    ipc_writer: Arc<Mutex<Option<UnixStream>>>,
+    pkexec_child: Arc<Mutex<Option<Child>>>,
+    profile: Profile,
+    mouse_config: MouseStickConfig,
+) {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(err) => {
+            set_unlock_failed(&shared, format!("Failed to locate gamepadv binary: {err}"));
+            return;
+        }
+    };
+    let (uid, gid) = current_uid_gid().unwrap_or((1000, 1000));
+    let sock_path = default_socket_path();
+
+    let child = match Command::new("pkexec")
+        .arg(&exe)
+        .arg("--daemon")
+        .arg("--socket")
+        .arg(&sock_path)
+        .arg("--owner-uid")
+        .arg(uid.to_string())
+        .arg("--owner-gid")
+        .arg(gid.to_string())
+        .arg("--start-paused")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(err) => {
+            set_unlock_failed(&shared, format!("Failed to launch pkexec: {err}"));
+            return;
+        }
+    };
+
+    *pkexec_child.lock().expect("child mutex poisoned") = Some(child);
+
+    // Wait up to 45s for the user to enter their password and the daemon to bind the socket.
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let stream = loop {
+        if !running.load(Ordering::Relaxed) {
+            return;
+        }
+        match UnixStream::connect(&sock_path) {
+            Ok(s) => break s,
+            Err(_) => {
+                let exited = {
+                    let mut guard = pkexec_child.lock().expect("child mutex poisoned");
+                    guard
+                        .as_mut()
+                        .and_then(|c| c.try_wait().ok().flatten())
+                };
+                if let Some(status) = exited {
+                    set_unlock_failed(
+                        &shared,
+                        format!("pkexec authorization cancelled or failed (exit: {status})"),
+                    );
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    set_unlock_failed(
+                        &shared,
+                        "Timed out waiting for pkexec daemon socket.".to_string(),
+                    );
+                    return;
+                }
+                thread::sleep(Duration::from_millis(60));
+            }
+        }
+    };
+
+    let mut writer = match stream.try_clone() {
+        Ok(w) => w,
+        Err(err) => {
+            set_unlock_failed(&shared, format!("IPC stream clone failed: {err}"));
+            return;
+        }
+    };
+
+    let initial_cfg = ProfileConfig::from_parts(&profile, &mouse_config);
+    let _ = write_json_line(&mut writer, &IpcCommand::UpdateProfile(initial_cfg));
+    *ipc_writer.lock().expect("ipc mutex poisoned") = Some(writer);
+
+    {
+        let mut guard = shared.lock().expect("engine mutex poisoned");
+        guard.unlocking = false;
+        guard.permission_error = None;
+        guard.status_message = "Connected to privileged input daemon (PAUSED)".to_string();
+    }
+
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+    let mut reader = BufReader::new(stream);
+    while running.load(Ordering::Relaxed) {
+        match read_json_line::<IpcSnapshot>(&mut reader) {
+            Ok(Some(snap)) => {
+                let mut guard = shared.lock().expect("engine mutex poisoned");
+                guard.active = snap.active;
+                guard.latest_state = snap.latest_state;
+                guard.keyboard_count = snap.keyboard_count;
+                guard.mouse_count = snap.mouse_count;
+                guard.status_message = snap.status_message;
+                guard.permission_error = snap.permission_error;
+            }
+            Ok(None) => break,
+            Err(err)
+                if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut =>
+            {
+                continue;
+            }
+            Err(_) => break,
+        }
+    }
+
+    *ipc_writer.lock().expect("ipc mutex poisoned") = None;
+}
+
+fn set_unlock_failed(shared: &Arc<Mutex<EngineShared>>, msg: String) {
+    let mut guard = shared.lock().expect("engine mutex poisoned");
+    guard.unlocking = false;
+    guard.active = false;
+    guard.status_message = msg.clone();
+    guard.permission_error = Some(msg);
+}
+
+/// Runs the privileged `--daemon` server bound to `socket_path` for GUI IPC.
+pub fn run_daemon_socket(
+    socket_path: &Path,
+    owner: Option<(u32, u32)>,
+    profile: Profile,
+    mouse_config: MouseStickConfig,
+    start_paused: bool,
+) -> io::Result<()> {
+    let (listener, _socket_guard) = bind_restricted_socket(socket_path, owner)?;
+    let (stream, _) = listener.accept()?;
+
+    let engine = Arc::new(Mutex::new(EngineHandle::spawn(
+        profile,
+        mouse_config,
+        start_paused,
+    )));
+    let daemon_running = Arc::new(AtomicBool::new(true));
+    let r_flag = Arc::clone(&daemon_running);
+    let _ = ctrlc::set_handler(move || {
+        r_flag.store(false, Ordering::SeqCst);
+    });
+
+    let mut writer = stream.try_clone()?;
+    let cmd_running = Arc::clone(&daemon_running);
+    let cmd_engine = Arc::clone(&engine);
+
+    let cmd_reader_handle = thread::spawn(move || {
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+        let mut reader = BufReader::new(stream);
+        while cmd_running.load(Ordering::Relaxed) {
+            match read_json_line::<IpcCommand>(&mut reader) {
+                Ok(Some(cmd)) => {
+                    let eng = cmd_engine.lock().expect("daemon engine mutex poisoned");
+                    match cmd {
+                        IpcCommand::SetActive(val) => eng.set_active(val),
+                        IpcCommand::UpdateProfile(cfg) => {
+                            let (p, m) = cfg.into_parts();
+                            eng.update_profile(p);
+                            eng.update_mouse_config(m);
+                        }
+                        IpcCommand::Shutdown => {
+                            cmd_running.store(false, Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    cmd_running.store(false, Ordering::SeqCst);
+                    break;
+                }
+                Err(err)
+                    if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut =>
+                {
+                    continue;
+                }
+                Err(_) => {
+                    cmd_running.store(false, Ordering::SeqCst);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Wait briefly for initial device discovery, then stream snapshots to the GUI.
+    thread::sleep(Duration::from_millis(80));
+    while daemon_running.load(Ordering::Relaxed) {
+        let snap = {
+            let eng = engine.lock().expect("daemon engine mutex poisoned");
+            eng.snapshot()
+        };
+        let ipc_snap = IpcSnapshot {
+            active: snap.active,
+            latest_state: snap.latest_state,
+            keyboard_count: snap.keyboard_count,
+            mouse_count: snap.mouse_count,
+            status_message: snap.status_message,
+            permission_error: snap.permission_error,
+        };
+        if write_json_line(&mut writer, &ipc_snap).is_err() {
+            daemon_running.store(false, Ordering::SeqCst);
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    {
+        let mut eng = engine.lock().expect("daemon engine mutex poisoned");
+        eng.shutdown();
+    }
+    let _ = cmd_reader_handle.join();
+    Ok(())
 }
 
 fn set_engine_error(shared: &Arc<Mutex<EngineShared>>, msg: String, is_perm: bool) {
@@ -150,7 +448,7 @@ fn run_engine_thread(
             set_engine_error(
                 &shared,
                 format!(
-                    "Permission denied reading /dev/input/event* ({} nodes denied). See docs/udev-setup.md to grant uaccess or input group permissions.",
+                    "Permission denied reading /dev/input/event* ({} nodes denied).",
                     report.event_nodes_permission_denied
                 ),
                 true,
@@ -231,7 +529,6 @@ fn run_engine_thread(
     let mut next_tick = last_tick + tick_period;
 
     while running.load(Ordering::Relaxed) {
-        // Apply any pending GUI updates without blocking.
         let requested_active: bool;
         {
             let mut guard = shared.lock().expect("engine mutex poisoned");
