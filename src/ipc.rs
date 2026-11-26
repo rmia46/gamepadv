@@ -27,6 +27,10 @@ pub struct IpcSnapshot {
     pub mouse_count: usize,
     pub status_message: String,
     pub permission_error: Option<String>,
+    #[serde(default)]
+    pub last_key: Option<String>,
+    #[serde(default)]
+    pub mouse_delta: (i32, i32),
 }
 
 /// Returns the current process UID and GID via `/proc/self` metadata (no `libc` needed).
@@ -156,6 +160,8 @@ mod tests {
                 mouse_count: 1,
                 status_message: "ACTIVE".to_string(),
                 permission_error: None,
+                last_key: Some("Space (down)".to_string()),
+                mouse_delta: (5, -2),
             };
             write_json_line(&mut stream, &snap).unwrap();
         });

@@ -7,11 +7,12 @@ use gamepadv::engine::MouseStickConfig;
 use gamepadv::gui::run_gui;
 use gamepadv::input::{probe_input_devices, DeviceClass};
 use gamepadv::profile::{zelda_default, ProfileConfig};
-use gamepadv::runtime::{run_daemon_socket, EngineHandle};
+use gamepadv::runtime::{run_daemon_socket, run_monitor, EngineHandle};
 use gamepadv::virtual_pad::VirtualXbox360;
 
 struct CliOptions {
     check_only: bool,
+    monitor: bool,
     headless: bool,
     daemon: bool,
     socket: Option<PathBuf>,
@@ -44,6 +45,7 @@ fn parse_u32(flag: &str, raw: Option<String>) -> Result<u32, String> {
 fn parse_args() -> Result<CliOptions, String> {
     let mut opts = CliOptions {
         check_only: false,
+        monitor: false,
         headless: false,
         daemon: false,
         socket: None,
@@ -64,6 +66,7 @@ fn parse_args() -> Result<CliOptions, String> {
                 std::process::exit(0);
             }
             "--check" => opts.check_only = true,
+            "--monitor" => opts.monitor = true,
             "--headless" => opts.headless = true,
             "--daemon" => opts.daemon = true,
             "--socket" => {
@@ -114,6 +117,7 @@ USAGE:
 
 OPTIONS:
     --headless            Run in terminal-only daemon mode (no GUI window)
+    --monitor             Live CLI input check (prints key presses and mouse movement)
     --daemon              Run as Unix-socket IPC daemon (used with --socket / pkexec)
     --socket <PATH>       Unix socket path for --daemon mode
     --check               Probe /dev/uinput and /dev/input/event* permissions and exit
@@ -241,6 +245,9 @@ fn main() {
 
     if opts.check_only {
         std::process::exit(run_check());
+    }
+    if opts.monitor {
+        std::process::exit(run_monitor());
     }
 
     let (profile, mut mouse_config) = ProfileConfig::default_config_path()

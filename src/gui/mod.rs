@@ -7,11 +7,12 @@ use eframe::egui::{self, Color32, Rounding, Stroke};
 
 use crate::engine::MouseStickConfig;
 use crate::profile::{zelda_default, GamepadAction, Profile, ProfileConfig};
-use crate::runtime::EngineHandle;
+use crate::runtime::{EngineHandle, EngineSnapshot};
 
 /// Main `eframe` application state for GamepadV.
 pub struct GamepadVApp {
     engine: EngineHandle,
+    last_snapshot: EngineSnapshot,
     profile: Profile,
     mouse_config: MouseStickConfig,
     listening_for: Option<GamepadAction>,
@@ -25,8 +26,10 @@ impl GamepadVApp {
     #[must_use]
     pub fn new(profile: Profile, mouse_config: MouseStickConfig, start_paused: bool) -> Self {
         let engine = EngineHandle::spawn(profile.clone(), mouse_config, start_paused);
+        let last_snapshot = engine.snapshot();
         Self {
             engine,
+            last_snapshot,
             profile,
             mouse_config,
             listening_for: None,
@@ -44,6 +47,7 @@ pub fn run_gui(
     start_paused: bool,
 ) -> eframe::Result<()> {
     let options = eframe::NativeOptions {
+        vsync: false,
         viewport: egui::ViewportBuilder::default()
             .with_title("GamepadV — Virtual Xbox 360 Controller")
             .with_inner_size([1080.0, 720.0])
@@ -67,7 +71,10 @@ pub fn run_gui(
 
 impl eframe::App for GamepadVApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let snap = self.engine.snapshot();
+        if let Some(fresh) = self.engine.try_snapshot() {
+            self.last_snapshot = fresh;
+        }
+        let snap = self.last_snapshot.clone();
 
         // Top Bar: Active/Paused Toggle, Device Status, and Permission Warning
         egui::TopBottomPanel::top("top_bar")
@@ -121,6 +128,25 @@ impl eframe::App for GamepadVApp {
                                 .small()
                                 .color(Color32::from_rgb(160, 170, 185)),
                         );
+                    });
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let key_text = snap.last_key.as_deref().unwrap_or("—");
+                        let (dx, dy) = snap.mouse_delta;
+                        egui::Frame::none()
+                            .fill(Color32::from_rgb(30, 34, 44))
+                            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(60, 68, 84)))
+                            .rounding(Rounding::same(5.0))
+                            .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Input Check | Key: {key_text} | Mouse: ({dx:+}, {dy:+})"
+                                    ))
+                                    .small()
+                                    .color(Color32::from_rgb(190, 215, 240)),
+                                );
+                            });
                     });
                 });
 
@@ -321,10 +347,10 @@ impl eframe::App for GamepadVApp {
                 }
             });
 
-        if snap.active || snap.unlocking || self.listening_for.is_some() {
+        if snap.active || snap.unlocking || snap.permission_error.is_none() || self.listening_for.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         } else {
-            ctx.request_repaint_after(Duration::from_millis(150));
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
 }

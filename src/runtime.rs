@@ -16,7 +16,7 @@ use crate::ipc::{
     bind_restricted_socket, current_uid_gid, default_socket_path, read_json_line,
     write_json_line, IpcCommand, IpcSnapshot,
 };
-use crate::profile::{Profile, ProfileConfig};
+use crate::profile::{key_display_name, Profile, ProfileConfig};
 use crate::virtual_pad::VirtualXbox360;
 
 const SPIN_MARGIN: Duration = Duration::from_micros(750);
@@ -31,6 +31,8 @@ pub struct EngineSnapshot {
     pub mouse_count: usize,
     pub status_message: String,
     pub permission_error: Option<String>,
+    pub last_key: Option<String>,
+    pub mouse_delta: (i32, i32),
 }
 
 #[derive(Debug)]
@@ -43,6 +45,8 @@ struct EngineShared {
     mouse_count: usize,
     status_message: String,
     permission_error: Option<String>,
+    last_key: Option<String>,
+    mouse_delta: (i32, i32),
     pending_profile: Option<Profile>,
     pending_mouse_config: Option<MouseStickConfig>,
     latest_profile: Profile,
@@ -73,6 +77,8 @@ impl EngineHandle {
             mouse_count: 0,
             status_message: "Initializing input engine...".to_string(),
             permission_error: None,
+            last_key: None,
+            mouse_delta: (0, 0),
             pending_profile: None,
             pending_mouse_config: None,
             latest_profile: profile.clone(),
@@ -129,6 +135,18 @@ impl EngineHandle {
     /// Returns the latest snapshot of engine status and virtual gamepad state.
     pub fn snapshot(&self) -> EngineSnapshot {
         let guard = self.shared.lock().expect("engine mutex poisoned");
+        Self::snapshot_from_guard(&guard)
+    }
+
+    /// Non-blocking snapshot read for the GUI thread (returns `None` if contended).
+    pub fn try_snapshot(&self) -> Option<EngineSnapshot> {
+        self.shared
+            .try_lock()
+            .ok()
+            .map(|guard| Self::snapshot_from_guard(&guard))
+    }
+
+    fn snapshot_from_guard(guard: &EngineShared) -> EngineSnapshot {
         EngineSnapshot {
             active: guard.active,
             unlocking: guard.unlocking,
@@ -137,6 +155,8 @@ impl EngineHandle {
             mouse_count: guard.mouse_count,
             status_message: guard.status_message.clone(),
             permission_error: guard.permission_error.clone(),
+            last_key: guard.last_key.clone(),
+            mouse_delta: guard.mouse_delta,
         }
     }
 
@@ -310,6 +330,10 @@ fn run_pkexec_ipc_client(
                 guard.mouse_count = snap.mouse_count;
                 guard.status_message = snap.status_message;
                 guard.permission_error = snap.permission_error;
+                if snap.last_key.is_some() {
+                    guard.last_key = snap.last_key;
+                }
+                guard.mouse_delta = snap.mouse_delta;
             }
             Ok(None) => break,
             Err(err)
@@ -409,6 +433,8 @@ pub fn run_daemon_socket(
             mouse_count: snap.mouse_count,
             status_message: snap.status_message,
             permission_error: snap.permission_error,
+            last_key: snap.last_key,
+            mouse_delta: snap.mouse_delta,
         };
         if write_json_line(&mut writer, &ipc_snap).is_err() {
             daemon_running.store(false, Ordering::SeqCst);
@@ -570,6 +596,8 @@ fn run_engine_thread(
 
         let toggle_key = mapper.profile().toggle_key;
         let mut toggle_pressed = false;
+        let mut last_key_event: Option<String> = None;
+        let mut tick_mouse_delta: (i32, i32) = (0, 0);
         if let Err(err) = drain_events(
             &mut rig,
             &mut mapper,
@@ -577,6 +605,8 @@ fn run_engine_thread(
             active,
             &mut toggle_pressed,
             &mut passthrough_pressed,
+            &mut last_key_event,
+            &mut tick_mouse_delta,
         ) {
             set_engine_error(&shared, format!("Input loop error: {err}"), false);
             break;
@@ -605,20 +635,25 @@ fn run_engine_thread(
             };
         }
 
-        let state = if active {
-            let s = mapper.tick(dt_secs);
-            if let Err(err) = virtual_pad.sync_state(&s) {
+        // Tick the mapper even when paused so the GUI shows live stick/button preview,
+        // but only emit to VirtualXbox360 when active.
+        let state = mapper.tick(dt_secs);
+        if active {
+            if let Err(err) = virtual_pad.sync_state(&state) {
                 set_engine_error(&shared, format!("Virtual pad sync error: {err}"), false);
                 break;
             }
-            s
-        } else {
-            GamepadState::default()
-        };
+        }
 
         {
             let mut guard = shared.lock().expect("engine mutex poisoned");
             guard.latest_state = state;
+            if let Some(k) = last_key_event {
+                guard.last_key = Some(k);
+            }
+            if tick_mouse_delta != (0, 0) {
+                guard.mouse_delta = tick_mouse_delta;
+            }
         }
 
         let after_work = Instant::now();
@@ -658,6 +693,7 @@ fn apply_active_transition(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drain_device_slice(
     devices: &mut [Device],
     mapper: &mut InputMapper,
@@ -665,6 +701,8 @@ fn drain_device_slice(
     active: bool,
     toggle_pressed: &mut bool,
     passthrough_queue: &mut Vec<(KeyCode, i32)>,
+    last_key_event: &mut Option<String>,
+    tick_mouse_delta: &mut (i32, i32),
 ) -> std::io::Result<()> {
     for dev in devices.iter_mut() {
         loop {
@@ -673,30 +711,38 @@ fn drain_device_slice(
                     for ev in events {
                         match ev.destructure() {
                             EventSummary::Key(_, code, value) => {
+                                if value == 0 || value == 1 {
+                                    *last_key_event = Some(format!(
+                                        "{} ({})",
+                                        key_display_name(code),
+                                        if value == 1 { "down" } else { "up" }
+                                    ));
+                                }
                                 if code == toggle_key {
                                     if value == 1 {
                                         *toggle_pressed = true;
                                     }
                                     continue;
                                 }
-                                if !active {
-                                    continue;
-                                }
                                 if value == 0 || value == 1 {
-                                    if !mapper.handle_key(code, value == 1) {
+                                    let handled = mapper.handle_key(code, value == 1);
+                                    if active && !handled {
                                         passthrough_queue.push((code, value));
                                     }
-                                } else if value == 2
+                                } else if active
+                                    && value == 2
                                     && !mapper.profile().bindings.contains_key(&code)
                                 {
                                     passthrough_queue.push((code, 2));
                                 }
                             }
-                            EventSummary::RelativeAxis(_, axis, value) if active => match axis {
+                            EventSummary::RelativeAxis(_, axis, value) => match axis {
                                 RelativeAxisCode::REL_X => {
+                                    tick_mouse_delta.0 += value;
                                     mapper.feed_mouse_delta(value as f64, 0.0);
                                 }
                                 RelativeAxisCode::REL_Y => {
+                                    tick_mouse_delta.1 += value;
                                     mapper.feed_mouse_delta(0.0, value as f64);
                                 }
                                 _ => {}
@@ -723,6 +769,7 @@ fn release_passthrough_keys(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drain_events(
     rig: &mut InputRig,
     mapper: &mut InputMapper,
@@ -730,6 +777,8 @@ fn drain_events(
     active: bool,
     toggle_pressed: &mut bool,
     passthrough_pressed: &mut HashSet<KeyCode>,
+    last_key_event: &mut Option<String>,
+    tick_mouse_delta: &mut (i32, i32),
 ) -> std::io::Result<()> {
     let mut passthrough_queue: Vec<(KeyCode, i32)> = Vec::new();
 
@@ -740,6 +789,8 @@ fn drain_events(
         active,
         toggle_pressed,
         &mut passthrough_queue,
+        last_key_event,
+        tick_mouse_delta,
     )?;
     drain_device_slice(
         rig.mice_mut(),
@@ -748,6 +799,8 @@ fn drain_events(
         active,
         toggle_pressed,
         &mut passthrough_queue,
+        last_key_event,
+        tick_mouse_delta,
     )?;
 
     for (code, value) in passthrough_queue {
@@ -759,5 +812,101 @@ fn drain_events(
         rig.forward_passthrough_key(code, value)?;
     }
 
+    Ok(())
+}
+
+/// Passive CLI live input monitor (`--monitor`): prints raw key presses and mouse
+/// movements without `EVIOCGRAB` or `uinput` output.
+pub fn run_monitor() -> i32 {
+    let report = match probe_input_devices() {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("Error probing /dev/input/event*: {err}");
+            return 1;
+        }
+    };
+
+    let mut rig = match InputRig::discover() {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("Error discovering input devices: {err}");
+            return 1;
+        }
+    };
+
+    if rig.keyboard_count() == 0 && rig.mouse_count() == 0 {
+        if report.event_nodes_permission_denied > 0 {
+            eprintln!(
+                "Error: Permission denied reading /dev/input/event* ({} nodes denied).\n\
+                 Run with `sudo` (e.g. `sudo ./target/release/gamepadv --monitor`) or see docs/udev-setup.md.",
+                report.event_nodes_permission_denied
+            );
+        } else {
+            eprintln!("Error: no readable keyboards or mice found under /dev/input/event*");
+        }
+        return 1;
+    }
+
+    let running = Arc::new(AtomicBool::new(true));
+    let r_flag = Arc::clone(&running);
+    let _ = ctrlc::set_handler(move || {
+        r_flag.store(false, Ordering::SeqCst);
+    });
+
+    println!(
+        "[GamepadV Monitor] Listening passively on {} keyboard(s), {} mouse/mice (no grab). Move mouse or press keys (Ctrl+C to quit)...",
+        rig.keyboard_count(),
+        rig.mouse_count()
+    );
+
+    while running.load(Ordering::Relaxed) {
+        let mut dx = 0i32;
+        let mut dy = 0i32;
+        if let Err(err) = poll_monitor_slice(rig.keyboards_mut(), &mut dx, &mut dy) {
+            eprintln!("Read error: {err}");
+            return 1;
+        }
+        if let Err(err) = poll_monitor_slice(rig.mice_mut(), &mut dx, &mut dy) {
+            eprintln!("Read error: {err}");
+            return 1;
+        }
+        if dx != 0 || dy != 0 {
+            println!("[MOUSE] dx={dx:+}, dy={dy:+}");
+        }
+        thread::sleep(Duration::from_millis(16));
+    }
+
+    println!("[GamepadV Monitor] Exited.");
+    0
+}
+
+fn poll_monitor_slice(devices: &mut [Device], dx: &mut i32, dy: &mut i32) -> io::Result<()> {
+    for dev in devices.iter_mut() {
+        loop {
+            match dev.fetch_events() {
+                Ok(events) => {
+                    for ev in events {
+                        match ev.destructure() {
+                            EventSummary::Key(_, code, value) if value == 0 || value == 1 => {
+                                println!(
+                                    "[KEY] {:<14} {}",
+                                    key_display_name(code),
+                                    if value == 1 { "DOWN" } else { "UP" }
+                                );
+                            }
+                            EventSummary::RelativeAxis(_, axis, value) => match axis {
+                                RelativeAxisCode::REL_X => *dx += value,
+                                RelativeAxisCode::REL_Y => *dy += value,
+                                _ => {}
+                            },
+                            _ => {}
+                        }
+                    }
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+                Err(err) => return Err(err),
+            }
+        }
+    }
     Ok(())
 }
