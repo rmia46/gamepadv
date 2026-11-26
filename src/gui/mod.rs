@@ -243,9 +243,9 @@ impl eframe::App for GamepadVApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let toggle_label = if snap.active {
-                        "● ACTIVE  (F8)"
+                        "> ACTIVE  (F8)"
                     } else {
-                        "❚❚ PAUSED  (F8)"
+                        "|| PAUSED  (F8)"
                     };
                     let toggle_fill = if snap.active {
                         Color32::from_rgb(38, 130, 68)
