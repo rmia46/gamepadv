@@ -1,3 +1,5 @@
+![GamepadV Banner](docs/banner.jpg)
+
 # GamepadV
 
 Zero-config Linux virtual Xbox 360 gamepad (`uinput`) driven by your keyboard and mouse, engineered for low-latency, jitter-free mouse-to-right-stick lookaround in emulators (Cemu, Dolphin, Yuzu/Ryujinx, RPCS3) and PC/Proton games. Works on both **X11 and Wayland**.
