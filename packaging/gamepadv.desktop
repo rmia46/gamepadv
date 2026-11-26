@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=GamepadV
+Comment=Virtual Xbox 360 gamepad driven by keyboard and mouse
+Exec=gamepadv
+Icon=input-gaming
+Terminal=false
+Type=Application
+Categories=Game;Utility;
+Keywords=gamepad;controller;uinput;evdev;mouse;keyboard;

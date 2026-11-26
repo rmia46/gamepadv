@@ -1,0 +1,61 @@
+name: Release Linux Packages
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install packaging dependencies
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev rpm
+
+      - name: Run tests & build release binary
+        run: |
+          cargo test
+          cargo build --release
+
+      - name: Package tar.gz, deb, and rpm
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+
+          # 1. Portable tar.gz
+          mkdir -p stage-tar
+          cp target/release/gamepadv stage-tar/
+          cp packaging/gamepadv.desktop stage-tar/
+          cp README.md stage-tar/
+          tar -czf "dist/gamepadv-${GITHUB_REF_NAME}-x86_64-linux-gnu.tar.gz" -C stage-tar .
+
+          # 2. Debian / Ubuntu .deb
+          mkdir -p stage-deb/DEBIAN stage-deb/usr/bin stage-deb/usr/share/applications
+          install -m 755 target/release/gamepadv stage-deb/usr/bin/gamepadv
+          install -m 644 packaging/gamepadv.desktop stage-deb/usr/share/applications/gamepadv.desktop
+          cat > stage-deb/DEBIAN/control <<EOF
+          Package: gamepadv
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: rmia46 <rmia46@users.noreply.github.com>
+          Description: Zero-config Linux virtual Xbox 360 gamepad driven by keyboard and mouse
+          EOF
+          dpkg-deb --build stage-deb "dist/gamepadv_${VERSION}_amd64.deb"
+
+          # 3. Checksums
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+
+      - name: Upload GitHub Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
