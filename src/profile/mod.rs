@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use evdev::KeyCode;
 
+use crate::engine::key_stick::KeyStickConfig;
 use crate::engine::mouse_stick::MouseStickConfig;
 
 pub use presets::builtin_presets;
@@ -60,12 +61,13 @@ pub struct Profile {
     pub walk_scale: f64,
     pub left_stick_mode: StickMode,
     pub right_stick_mode: StickMode,
+    pub key_stick: KeyStickConfig,
 }
 
 impl Profile {
     /// Creates a new [`Profile`] with the given name, toggle key, and bindings,
     /// using the default `walk_scale` of `0.5`, `left_stick_mode: StickMode::Keys`,
-    /// and `right_stick_mode: StickMode::Mouse`.
+    /// `right_stick_mode: StickMode::Mouse`, and default [`KeyStickConfig`].
     #[must_use]
     pub fn new(
         name: impl Into<String>,
@@ -79,6 +81,7 @@ impl Profile {
             walk_scale: 0.5,
             left_stick_mode: StickMode::Keys,
             right_stick_mode: StickMode::Mouse,
+            key_stick: KeyStickConfig::default(),
         }
     }
 
@@ -108,6 +111,8 @@ pub struct ProfileConfig {
     pub right_stick_mode: StickMode,
     pub bindings: Vec<(u16, GamepadAction)>,
     pub mouse: MouseStickConfig,
+    #[serde(default)]
+    pub key_stick: KeyStickConfig,
 }
 
 impl ProfileConfig {
@@ -129,6 +134,7 @@ impl ProfileConfig {
             right_stick_mode: profile.right_stick_mode,
             bindings,
             mouse: *mouse,
+            key_stick: profile.key_stick,
         }
     }
 
@@ -148,6 +154,7 @@ impl ProfileConfig {
             walk_scale: self.walk_scale,
             left_stick_mode: self.left_stick_mode,
             right_stick_mode: self.right_stick_mode,
+            key_stick: self.key_stick,
         };
         (profile, self.mouse)
     }

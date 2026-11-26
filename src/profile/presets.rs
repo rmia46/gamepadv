@@ -83,6 +83,8 @@ pub fn racing_driving() -> (&'static str, Profile, MouseStickConfig) {
     let mut profile = Profile::new("Racing / Driving", KeyCode::KEY_F8, bindings);
     profile.left_stick_mode = StickMode::Keys;
     profile.right_stick_mode = StickMode::Disabled;
+    profile.key_stick.sweep_ms = 110.0;
+    profile.key_stick.release_ms = 45.0;
 
     ("Racing / Driving", profile, MouseStickConfig::default())
 }
@@ -115,6 +117,8 @@ pub fn platformer_2d() -> (&'static str, Profile, MouseStickConfig) {
     let mut profile = Profile::new("2D Platformer", KeyCode::KEY_F8, bindings);
     profile.left_stick_mode = StickMode::Keys;
     profile.right_stick_mode = StickMode::Disabled;
+    profile.key_stick.sweep_ms = 0.0;
+    profile.key_stick.release_ms = 0.0;
 
     ("2D Platformer", profile, MouseStickConfig::default())
 }

@@ -402,6 +402,34 @@ impl eframe::App for GamepadVApp {
                     self.engine.update_mouse_config(self.mouse_config);
                 }
 
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.heading("Key Stick Sweep");
+                ui.add_space(4.0);
+
+                let mut key_stick_changed = false;
+                ui.label("Sweep Time (ms, 0 = instant)");
+                key_stick_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut self.profile.key_stick.sweep_ms, 0.0..=200.0)
+                            .fixed_decimals(0),
+                    )
+                    .changed();
+
+                ui.add_space(4.0);
+                ui.label("Release Decay (ms)");
+                key_stick_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut self.profile.key_stick.release_ms, 0.0..=100.0)
+                            .fixed_decimals(0),
+                    )
+                    .changed();
+
+                if key_stick_changed {
+                    self.engine.update_profile(self.profile.clone());
+                }
+
                 ui.add_space(14.0);
                 ui.separator();
                 ui.add_space(10.0);

@@ -1,9 +1,8 @@
 use std::collections::HashSet;
 use evdev::KeyCode;
 
-use crate::engine::mouse_stick::{
-    quantize_stick_axes, MouseStickConfig, MouseStickEngine, STICK_MAX_F64,
-};
+use crate::engine::key_stick::KeyStickSmoother;
+use crate::engine::mouse_stick::{MouseStickConfig, MouseStickEngine};
 use crate::profile::{GamepadAction, Profile, StickMode};
 
 /// Complete snapshot of the virtual Xbox 360 gamepad state for a single tick.
@@ -36,6 +35,8 @@ pub struct InputMapper {
     profile: Profile,
     pressed: HashSet<KeyCode>,
     mouse_stick: MouseStickEngine,
+    left_key_smoother: KeyStickSmoother,
+    right_key_smoother: KeyStickSmoother,
 }
 
 impl InputMapper {
@@ -46,6 +47,8 @@ impl InputMapper {
             profile,
             pressed: HashSet::new(),
             mouse_stick,
+            left_key_smoother: KeyStickSmoother::new(),
+            right_key_smoother: KeyStickSmoother::new(),
         }
     }
 
@@ -150,7 +153,8 @@ impl InputMapper {
         }
 
         let walk_scale = self.profile.walk_scale;
-        let key_left = compute_key_stick(
+        let key_stick_cfg = self.profile.key_stick;
+        let (tgt_lx, tgt_ly) = compute_key_stick_target(
             left_up,
             left_down,
             left_left,
@@ -158,7 +162,7 @@ impl InputMapper {
             walk_active,
             walk_scale,
         );
-        let key_right = compute_key_stick(
+        let (tgt_rx, tgt_ry) = compute_key_stick_target(
             right_up,
             right_down,
             right_left,
@@ -166,6 +170,21 @@ impl InputMapper {
             walk_active,
             walk_scale,
         );
+
+        let key_left = if self.profile.left_stick_mode == StickMode::Keys {
+            self.left_key_smoother
+                .update(tgt_lx, tgt_ly, dt_secs, &key_stick_cfg)
+        } else {
+            self.left_key_smoother.reset();
+            (0, 0)
+        };
+        let key_right = if self.profile.right_stick_mode == StickMode::Keys {
+            self.right_key_smoother
+                .update(tgt_rx, tgt_ry, dt_secs, &key_stick_cfg)
+        } else {
+            self.right_key_smoother.reset();
+            (0, 0)
+        };
 
         state.hat_x = match (dpad_left, dpad_right) {
             (true, false) => -1,
@@ -209,22 +228,24 @@ impl InputMapper {
         state
     }
 
-    /// Clears all pressed keys and resets the right-stick DSP engine.
+    /// Clears all pressed keys and resets both key-stick smoothers and the mouse DSP engine.
     pub fn reset(&mut self) {
         self.pressed.clear();
         self.mouse_stick.reset();
+        self.left_key_smoother.reset();
+        self.right_key_smoother.reset();
     }
 }
 
 #[inline]
-fn compute_key_stick(
+fn compute_key_stick_target(
     up: bool,
     down: bool,
     left: bool,
     right: bool,
     walk_active: bool,
     walk_scale: f64,
-) -> (i16, i16) {
+) -> (f64, f64) {
     let raw_x: f64 = match (left, right) {
         (true, false) => -1.0,
         (false, true) => 1.0,
@@ -238,7 +259,7 @@ fn compute_key_stick(
 
     let mag = raw_x.hypot(raw_y);
     if mag == 0.0 {
-        return (0, 0);
+        return (0.0, 0.0);
     }
 
     let scale = if walk_active {
@@ -246,19 +267,20 @@ fn compute_key_stick(
     } else {
         1.0
     };
-    let fx = (raw_x / mag) * scale * STICK_MAX_F64;
-    let fy = (raw_y / mag) * scale * STICK_MAX_F64;
-    quantize_stick_axes(fx, fy)
+    ((raw_x / mag) * scale, (raw_y / mag) * scale)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::mouse_stick::MouseStickConfig;
+    use crate::engine::mouse_stick::{MouseStickConfig, STICK_MAX_F64};
     use crate::profile::zelda_default;
 
     fn make_mapper() -> InputMapper {
-        InputMapper::new(zelda_default(), MouseStickEngine::new(MouseStickConfig::default()))
+        let mut profile = zelda_default();
+        profile.key_stick.sweep_ms = 0.0;
+        profile.key_stick.release_ms = 0.0;
+        InputMapper::new(profile, MouseStickEngine::new(MouseStickConfig::default()))
     }
 
     #[test]
@@ -386,6 +408,7 @@ mod tests {
         let mut profile = zelda_default();
         profile.left_stick_mode = StickMode::Mouse;
         profile.right_stick_mode = StickMode::Keys;
+        profile.key_stick.sweep_ms = 0.0;
         profile.set_binding(GamepadAction::RightStickUp, KeyCode::KEY_I);
         profile.set_binding(GamepadAction::RightStickRight, KeyCode::KEY_L);
 
