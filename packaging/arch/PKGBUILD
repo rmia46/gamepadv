@@ -1,6 +1,6 @@
 # Maintainer: rmia46 <rmia46@users.noreply.github.com>
 pkgname=gamepadv
-pkgver=0.2.0
+pkgver=0.2.1
 pkgrel=1
 pkgdesc="Zero-config Linux virtual Xbox 360 gamepad driven by keyboard and mouse"
 arch=('x86_64')

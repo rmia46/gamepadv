@@ -1,6 +1,6 @@
 [package]
 name = "gamepadv"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Zero-config Linux virtual Xbox 360 gamepad driven by keyboard and mouse"
 
