@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use evdev::{Device, EventSummary, KeyCode, RelativeAxisCode};
 
 use crate::engine::{GamepadState, InputMapper, MouseStickConfig, MouseStickEngine};
+use crate::gui::tray::{GamepadVTray, TrayCommand};
 use crate::input::{probe_input_devices, InputRig};
 use crate::ipc::{
     bind_restricted_socket, current_uid_gid, default_socket_path, read_json_line,
@@ -61,6 +62,7 @@ pub struct EngineHandle {
     join_handle: Option<JoinHandle<()>>,
     ipc_writer: Arc<Mutex<Option<UnixStream>>>,
     pkexec_child: Arc<Mutex<Option<Child>>>,
+    is_ui_client: bool,
 }
 
 impl EngineHandle {
@@ -99,12 +101,63 @@ impl EngineHandle {
             join_handle,
             ipc_writer: Arc::new(Mutex::new(None)),
             pkexec_child: Arc::new(Mutex::new(None)),
+            is_ui_client: false,
         }
+    }
+
+    /// Connects a `--gui-window` process to the background tray host over `socket_path`.
+    pub fn connect_to_tray_host(
+        socket_path: &Path,
+        profile: Profile,
+        mouse_config: MouseStickConfig,
+    ) -> io::Result<Self> {
+        let stream = UnixStream::connect(socket_path)?;
+        let writer = stream.try_clone()?;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let shared = Arc::new(Mutex::new(EngineShared {
+            active: false,
+            unlocking: false,
+            requested_active: false,
+            latest_state: GamepadState::default(),
+            keyboard_count: 0,
+            mouse_count: 0,
+            status_message: "Connecting to tray host...".to_string(),
+            permission_error: None,
+            last_key: None,
+            mouse_delta: (0, 0),
+            pending_profile: None,
+            pending_mouse_config: None,
+            latest_profile: profile,
+            latest_mouse_config: mouse_config,
+        }));
+
+        let r_flag = Arc::clone(&running);
+        let s_ref = Arc::clone(&shared);
+        let join_handle = thread::Builder::new()
+            .name("gamepadv-ui-ipc".to_string())
+            .spawn(move || read_snapshot_loop(stream, r_flag, s_ref))
+            .ok();
+
+        Ok(Self {
+            running,
+            shared,
+            join_handle,
+            ipc_writer: Arc::new(Mutex::new(Some(writer))),
+            pkexec_child: Arc::new(Mutex::new(None)),
+            is_ui_client: true,
+        })
     }
 
     /// Launches a privileged `gamepadv --daemon` via `pkexec` and connects over a
     /// user-restricted (`0600`) Unix socket so the GUI stays unprivileged.
     pub fn unlock_with_pkexec(&mut self, profile: Profile, mouse_config: MouseStickConfig) {
+        if self.is_ui_client {
+            if let Some(stream) = self.ipc_writer.lock().expect("ipc mutex poisoned").as_mut() {
+                let _ = write_json_line(stream, &IpcCommand::UnlockPkexec);
+            }
+            return;
+        }
         self.shutdown();
 
         self.running = Arc::new(AtomicBool::new(true));
@@ -196,6 +249,20 @@ impl EngineHandle {
         }
     }
 
+    /// Requests the tray host (or daemon) to shut down completely.
+    pub fn quit_host(&mut self) {
+        if let Some(stream) = self
+            .ipc_writer
+            .lock()
+            .expect("ipc mutex poisoned")
+            .take()
+            .as_mut()
+        {
+            let _ = write_json_line(stream, &IpcCommand::Shutdown);
+        }
+        self.shutdown();
+    }
+
     /// Signals the engine (or remote daemon) to exit cleanly and ungrab all devices.
     pub fn shutdown(&mut self) {
         self.running.store(false, Ordering::SeqCst);
@@ -206,7 +273,9 @@ impl EngineHandle {
             .take()
             .as_mut()
         {
-            let _ = write_json_line(stream, &IpcCommand::Shutdown);
+            if !self.is_ui_client {
+                let _ = write_json_line(stream, &IpcCommand::Shutdown);
+            }
         }
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
@@ -318,6 +387,15 @@ fn run_pkexec_ipc_client(
         guard.status_message = "Connected to privileged input daemon (PAUSED)".to_string();
     }
 
+    read_snapshot_loop(stream, running, shared);
+    *ipc_writer.lock().expect("ipc mutex poisoned") = None;
+}
+
+fn read_snapshot_loop(
+    stream: UnixStream,
+    running: Arc<AtomicBool>,
+    shared: Arc<Mutex<EngineShared>>,
+) {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
     let mut reader = BufReader::new(stream);
     while running.load(Ordering::Relaxed) {
@@ -325,6 +403,7 @@ fn run_pkexec_ipc_client(
             Ok(Some(snap)) => {
                 let mut guard = shared.lock().expect("engine mutex poisoned");
                 guard.active = snap.active;
+                guard.unlocking = snap.unlocking;
                 guard.latest_state = snap.latest_state;
                 guard.keyboard_count = snap.keyboard_count;
                 guard.mouse_count = snap.mouse_count;
@@ -344,8 +423,6 @@ fn run_pkexec_ipc_client(
             Err(_) => break,
         }
     }
-
-    *ipc_writer.lock().expect("ipc mutex poisoned") = None;
 }
 
 fn set_unlock_failed(shared: &Arc<Mutex<EngineShared>>, msg: String) {
@@ -396,6 +473,7 @@ pub fn run_daemon_socket(
                             eng.update_profile(p);
                             eng.update_mouse_config(m);
                         }
+                        IpcCommand::UnlockPkexec => {}
                         IpcCommand::Shutdown => {
                             cmd_running.store(false, Ordering::SeqCst);
                             break;
@@ -428,6 +506,7 @@ pub fn run_daemon_socket(
         };
         let ipc_snap = IpcSnapshot {
             active: snap.active,
+            unlocking: snap.unlocking,
             latest_state: snap.latest_state,
             keyboard_count: snap.keyboard_count,
             mouse_count: snap.mouse_count,
@@ -909,4 +988,205 @@ fn poll_monitor_slice(devices: &mut [Device], dx: &mut i32, dy: &mut i32) -> io:
         }
     }
     Ok(())
+}
+
+struct TempFileGuard(std::path::PathBuf);
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn spawn_gui_window(
+    exe: &Path,
+    socket_path: &Path,
+    state_path: &Path,
+) -> io::Result<Child> {
+    Command::new(exe)
+        .arg("--gui-window")
+        .arg("--socket")
+        .arg(socket_path)
+        .arg("--state-file")
+        .arg(state_path)
+        .spawn()
+}
+
+/// Runs the background engine + D-Bus tray host, spawning `--gui-window` as a
+/// separate process so closing / minimizing to tray works reliably on Hyprland/Wayland.
+pub fn run_tray_host(
+    mut profile: Profile,
+    mut mouse_config: MouseStickConfig,
+    start_paused: bool,
+) -> i32 {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("Error locating gamepadv binary: {err}");
+            return 1;
+        }
+    };
+
+    let tray_active = Arc::new(AtomicBool::new(!start_paused));
+    let tray_visible = Arc::new(AtomicBool::new(true));
+    let Some((tray_handle, tray_rx)) = GamepadVTray::spawn(
+        eframe::egui::Context::default(),
+        Arc::clone(&tray_active),
+        Arc::clone(&tray_visible),
+    ) else {
+        // Fallback to direct in-process GUI if no D-Bus tray is available.
+        if let Err(err) = crate::gui::run_gui(profile, mouse_config, start_paused) {
+            eprintln!("Error launching GUI: {err}");
+            return 1;
+        }
+        return 0;
+    };
+
+    let sock_path = default_socket_path();
+    let (listener, _sock_guard) = match bind_restricted_socket(&sock_path, None) {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!("Error binding tray host socket: {err}");
+            return 1;
+        }
+    };
+    let _ = listener.set_nonblocking(true);
+
+    let state_path = std::env::temp_dir().join(format!("gamepadv-ui-{}.json", std::process::id()));
+    let _state_guard = TempFileGuard(state_path.clone());
+    let _ = ProfileConfig::from_parts(&profile, &mouse_config).save_to_file(&state_path);
+
+    let mut engine = EngineHandle::spawn(profile.clone(), mouse_config, start_paused);
+
+    let host_running = Arc::new(AtomicBool::new(true));
+    let r_flag = Arc::clone(&host_running);
+    let _ = ctrlc::set_handler(move || {
+        r_flag.store(false, Ordering::SeqCst);
+    });
+
+    let mut gui_child = spawn_gui_window(&exe, &sock_path, &state_path).ok();
+    let mut ui_stream: Option<UnixStream> = None;
+    let mut ui_reader: Option<BufReader<UnixStream>> = None;
+
+    while host_running.load(Ordering::Relaxed) {
+        // Accept incoming --gui-window connection if any.
+        if let Ok((stream, _)) = listener.accept() {
+            let _ = stream.set_nonblocking(true);
+            if let Ok(reader_stream) = stream.try_clone() {
+                ui_stream = Some(stream);
+                ui_reader = Some(BufReader::new(reader_stream));
+            }
+        }
+
+        // Reap exited GUI window (e.g. Win+Q on Hyprland or Minimize to Tray).
+        if let Some(child) = gui_child.as_mut() {
+            if let Ok(Some(_)) = child.try_wait() {
+                gui_child = None;
+                ui_stream = None;
+                ui_reader = None;
+                if tray_visible.swap(false, Ordering::Relaxed) {
+                    tray_handle.update(|_| {});
+                }
+            }
+        }
+
+        // Read commands from the active GUI window.
+        let mut disconnect_ui = false;
+        if let Some(reader) = ui_reader.as_mut() {
+            loop {
+                match read_json_line::<IpcCommand>(reader) {
+                    Ok(Some(cmd)) => match cmd {
+                        IpcCommand::SetActive(val) => engine.set_active(val),
+                        IpcCommand::UpdateProfile(cfg) => {
+                            let (p, m) = cfg.clone().into_parts();
+                            profile = p.clone();
+                            mouse_config = m;
+                            let _ = cfg.save_to_file(&state_path);
+                            engine.update_profile(p);
+                            engine.update_mouse_config(m);
+                        }
+                        IpcCommand::UnlockPkexec => {
+                            engine.unlock_with_pkexec(profile.clone(), mouse_config);
+                        }
+                        IpcCommand::Shutdown => {
+                            host_running.store(false, Ordering::SeqCst);
+                            break;
+                        }
+                    },
+                    Ok(None) => {
+                        disconnect_ui = true;
+                        break;
+                    }
+                    Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+                    Err(_) => {
+                        disconnect_ui = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if disconnect_ui {
+            ui_stream = None;
+            ui_reader = None;
+        }
+
+        let snap = engine.snapshot();
+        if tray_active.swap(snap.active, Ordering::Relaxed) != snap.active {
+            tray_handle.update(|_| {});
+        }
+
+        // Stream latest snapshot to the GUI window if connected.
+        if let Some(stream) = ui_stream.as_mut() {
+            let ipc_snap = IpcSnapshot {
+                active: snap.active,
+                unlocking: snap.unlocking,
+                latest_state: snap.latest_state,
+                keyboard_count: snap.keyboard_count,
+                mouse_count: snap.mouse_count,
+                status_message: snap.status_message.clone(),
+                permission_error: snap.permission_error.clone(),
+                last_key: snap.last_key.clone(),
+                mouse_delta: snap.mouse_delta,
+            };
+            if write_json_line(stream, &ipc_snap).is_err() {
+                ui_stream = None;
+                ui_reader = None;
+            }
+        }
+
+        // Handle tray icon / menu actions.
+        while let Ok(cmd) = tray_rx.try_recv() {
+            match cmd {
+                TrayCommand::ToggleShowHide => {
+                    if let Some(mut child) = gui_child.take() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        ui_stream = None;
+                        ui_reader = None;
+                        tray_visible.store(false, Ordering::Relaxed);
+                    } else if let Ok(child) = spawn_gui_window(&exe, &sock_path, &state_path) {
+                        gui_child = Some(child);
+                        tray_visible.store(true, Ordering::Relaxed);
+                    }
+                    tray_handle.update(|_| {});
+                }
+                TrayCommand::ToggleActive => {
+                    if snap.permission_error.is_none() && !snap.unlocking {
+                        engine.set_active(!snap.active);
+                    }
+                }
+                TrayCommand::Quit => {
+                    host_running.store(false, Ordering::SeqCst);
+                }
+            }
+        }
+
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    if let Some(mut child) = gui_child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    engine.shutdown();
+    0
 }

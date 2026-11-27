@@ -10,18 +10,21 @@ use serde::{Deserialize, Serialize};
 use crate::engine::{GamepadState, MouseStickConfig};
 use crate::profile::{Profile, ProfileConfig};
 
-/// Commands sent from the unprivileged GUI to the privileged `--daemon` process.
+/// Commands sent from the unprivileged GUI to the `--daemon` or tray host process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcCommand {
     SetActive(bool),
     UpdateProfile(ProfileConfig),
+    UnlockPkexec,
     Shutdown,
 }
 
-/// Snapshot streamed from the `--daemon` process to the GUI.
+/// Snapshot streamed from the `--daemon` / tray host process to the GUI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcSnapshot {
     pub active: bool,
+    #[serde(default)]
+    pub unlocking: bool,
     pub latest_state: GamepadState,
     pub keyboard_count: usize,
     pub mouse_count: usize,
@@ -151,6 +154,7 @@ mod tests {
 
             let snap = IpcSnapshot {
                 active: true,
+                unlocking: false,
                 latest_state: GamepadState {
                     south: true,
                     right_x: 12345,

@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gamepadv::engine::MouseStickConfig;
-use gamepadv::gui::run_gui;
+use gamepadv::gui::run_gui_window;
 use gamepadv::input::{probe_input_devices, DeviceClass};
 use gamepadv::profile::{default_3d_action, ProfileConfig};
-use gamepadv::runtime::{run_daemon_socket, run_monitor, EngineHandle};
+use gamepadv::runtime::{run_daemon_socket, run_monitor, run_tray_host, EngineHandle};
 use gamepadv::virtual_pad::VirtualXbox360;
 
 struct CliOptions {
@@ -15,7 +15,9 @@ struct CliOptions {
     monitor: bool,
     headless: bool,
     daemon: bool,
+    gui_window: bool,
     socket: Option<PathBuf>,
+    state_file: Option<PathBuf>,
     owner_uid: Option<u32>,
     owner_gid: Option<u32>,
     start_paused: Option<bool>,
@@ -48,7 +50,9 @@ fn parse_args() -> Result<CliOptions, String> {
         monitor: false,
         headless: false,
         daemon: false,
+        gui_window: false,
         socket: None,
+        state_file: None,
         owner_uid: None,
         owner_gid: None,
         start_paused: None,
@@ -69,11 +73,18 @@ fn parse_args() -> Result<CliOptions, String> {
             "--monitor" => opts.monitor = true,
             "--headless" => opts.headless = true,
             "--daemon" => opts.daemon = true,
+            "--gui-window" => opts.gui_window = true,
             "--socket" => {
                 let val = args
                     .next()
                     .ok_or_else(|| "--socket requires a path".to_string())?;
                 opts.socket = Some(PathBuf::from(val));
+            }
+            "--state-file" => {
+                let val = args
+                    .next()
+                    .ok_or_else(|| "--state-file requires a path".to_string())?;
+                opts.state_file = Some(PathBuf::from(val));
             }
             "--owner-uid" => opts.owner_uid = Some(parse_u32("--owner-uid", args.next())?),
             "--owner-gid" => opts.owner_gid = Some(parse_u32("--owner-gid", args.next())?),
@@ -288,6 +299,24 @@ fn main() {
         return;
     }
 
+    if opts.gui_window {
+        let Some(socket_path) = opts.socket else {
+            eprintln!("Error: --gui-window requires --socket <PATH>");
+            std::process::exit(2);
+        };
+        let (p, m) = opts
+            .state_file
+            .as_deref()
+            .and_then(|sf| ProfileConfig::load_from_file(sf).ok())
+            .map(ProfileConfig::into_parts)
+            .unwrap_or((profile, mouse_config));
+        if let Err(err) = run_gui_window(&socket_path, p, m) {
+            eprintln!("Error launching GUI window: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if opts.headless {
         let start_paused = opts.start_paused.unwrap_or(false);
         std::process::exit(run_headless(profile, mouse_config, start_paused));
@@ -295,8 +324,5 @@ fn main() {
 
     // Default to paused in GUI mode so the user can configure bindings before locking cursor.
     let start_paused = opts.start_paused.unwrap_or(true);
-    if let Err(err) = run_gui(profile, mouse_config, start_paused) {
-        eprintln!("Error launching GUI: {err}");
-        std::process::exit(1);
-    }
+    std::process::exit(run_tray_host(profile, mouse_config, start_paused));
 }

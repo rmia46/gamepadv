@@ -39,6 +39,7 @@ pub struct GamepadVApp {
     tray_active: Arc<AtomicBool>,
     tray_visible: Arc<AtomicBool>,
     minimize_to_tray_on_close: bool,
+    is_hosted_window: bool,
     quitting: bool,
 }
 
@@ -53,7 +54,6 @@ impl GamepadVApp {
     ) -> Self {
         let engine = EngineHandle::spawn(profile.clone(), mouse_config, start_paused);
         let last_snapshot = engine.snapshot();
-        let saved_profiles = ProfileConfig::list_saved_profiles();
         let tray_active = Arc::new(AtomicBool::new(last_snapshot.active));
         let tray_visible = Arc::new(AtomicBool::new(true));
         let (tray_handle, tray_rx) = match tray::GamepadVTray::spawn(
@@ -64,7 +64,52 @@ impl GamepadVApp {
             Some((h, rx)) => (Some(h), Some(rx)),
             None => (None, None),
         };
+        Self::from_parts(
+            engine,
+            profile,
+            mouse_config,
+            tray_handle,
+            tray_rx,
+            tray_active,
+            tray_visible,
+            false,
+        )
+    }
 
+    /// Creates a [`GamepadVApp`] connected to an existing tray host over IPC.
+    #[must_use]
+    pub fn new_hosted(
+        engine: EngineHandle,
+        profile: Profile,
+        mouse_config: MouseStickConfig,
+    ) -> Self {
+        let tray_active = Arc::new(AtomicBool::new(false));
+        let tray_visible = Arc::new(AtomicBool::new(true));
+        Self::from_parts(
+            engine,
+            profile,
+            mouse_config,
+            None,
+            None,
+            tray_active,
+            tray_visible,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_parts(
+        engine: EngineHandle,
+        profile: Profile,
+        mouse_config: MouseStickConfig,
+        tray_handle: Option<ksni::blocking::Handle<tray::GamepadVTray>>,
+        tray_rx: Option<mpsc::Receiver<tray::TrayCommand>>,
+        tray_active: Arc<AtomicBool>,
+        tray_visible: Arc<AtomicBool>,
+        is_hosted_window: bool,
+    ) -> Self {
+        let last_snapshot = engine.snapshot();
+        let saved_profiles = ProfileConfig::list_saved_profiles();
         Self {
             engine,
             last_snapshot,
@@ -89,6 +134,7 @@ impl GamepadVApp {
             tray_active,
             tray_visible,
             minimize_to_tray_on_close: true,
+            is_hosted_window,
             quitting: false,
         }
     }
@@ -213,6 +259,41 @@ pub fn run_gui(
     )
 }
 
+/// Launches a `--gui-window` viewport connected to the background tray host.
+pub fn run_gui_window(
+    socket_path: &Path,
+    profile: Profile,
+    mouse_config: MouseStickConfig,
+) -> eframe::Result<()> {
+    let engine = EngineHandle::connect_to_tray_host(socket_path, profile.clone(), mouse_config)
+        .map_err(|err| eframe::Error::AppCreation(Box::new(err)))?;
+
+    let options = eframe::NativeOptions {
+        vsync: false,
+        viewport: egui::ViewportBuilder::default()
+            .with_title(format!(
+                "GamepadV v{} — Virtual Xbox 360 Controller",
+                env!("CARGO_PKG_VERSION")
+            ))
+            .with_inner_size([1080.0, 720.0])
+            .with_min_inner_size([860.0, 600.0]),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "GamepadV",
+        options,
+        Box::new(move |cc| {
+            theme::apply_modern_theme(&cc.egui_ctx);
+            Ok(Box::new(GamepadVApp::new_hosted(
+                engine,
+                profile,
+                mouse_config,
+            )))
+        }),
+    )
+}
+
 impl eframe::App for GamepadVApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(fresh) = self.engine.try_snapshot() {
@@ -227,8 +308,20 @@ impl eframe::App for GamepadVApp {
             }
         }
 
-        // Intercept window close button (X) to minimize to tray when enabled.
+        // If running as a hosted window and user closed via Win+Q / X with
+        // minimize_to_tray_on_close disabled, shut down the tray host too.
         if ctx.input(|i| i.viewport().close_requested())
+            && self.is_hosted_window
+            && !self.minimize_to_tray_on_close
+            && !self.quitting
+        {
+            self.quitting = true;
+            self.engine.quit_host();
+        }
+
+        // Intercept window close button (X) to minimize to tray when running standalone.
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.is_hosted_window
             && self.minimize_to_tray_on_close
             && !self.quitting
             && self.tray_handle.is_some()
@@ -327,16 +420,25 @@ impl eframe::App for GamepadVApp {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if self.tray_handle.is_some() && ui.button("Minimize to Tray").clicked() {
-                            self.tray_visible.store(false, Ordering::Relaxed);
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                            if let Some(handle) = &self.tray_handle {
-                                handle.update(|_| {});
+                        if (self.is_hosted_window || self.tray_handle.is_some())
+                            && ui.button("Minimize to Tray").clicked()
+                        {
+                            if self.is_hosted_window {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            } else {
+                                self.tray_visible.store(false, Ordering::Relaxed);
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                                if let Some(handle) = &self.tray_handle {
+                                    handle.update(|_| {});
+                                }
                             }
                             ui.close_menu();
                         }
                         if ui.button("Quit").clicked() {
                             self.quitting = true;
+                            if self.is_hosted_window {
+                                self.engine.quit_host();
+                            }
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
@@ -359,7 +461,7 @@ impl eframe::App for GamepadVApp {
 
                     ui.menu_button("Settings", |ui| {
                         ui.checkbox(&mut self.show_tuning_panel, "Show Tuning Panel");
-                        if self.tray_handle.is_some() {
+                        if self.is_hosted_window || self.tray_handle.is_some() {
                             ui.checkbox(
                                 &mut self.minimize_to_tray_on_close,
                                 "Minimize to Tray on Close",
@@ -403,13 +505,17 @@ impl eframe::App for GamepadVApp {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if self.tray_handle.is_some()
+                        if (self.is_hosted_window || self.tray_handle.is_some())
                             && ui.small_button("Minimize to Tray").clicked()
                         {
-                            self.tray_visible.store(false, Ordering::Relaxed);
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                            if let Some(handle) = &self.tray_handle {
-                                handle.update(|_| {});
+                            if self.is_hosted_window {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            } else {
+                                self.tray_visible.store(false, Ordering::Relaxed);
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                                if let Some(handle) = &self.tray_handle {
+                                    handle.update(|_| {});
+                                }
                             }
                         }
                         ui.add_space(6.0);
