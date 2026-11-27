@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, Rounding, Stroke};
 
-use crate::engine::MouseStickConfig;
+use crate::engine::{MouseStickConfig, MouseStickMode};
 use crate::profile::{builtin_presets, default_3d_action, GamepadAction, Profile, ProfileConfig};
 use crate::runtime::{EngineHandle, EngineSnapshot};
 
@@ -655,6 +655,52 @@ impl eframe::App for GamepadVApp {
                             theme::section_header(ui, "Mouse Stick Tuning");
 
                             let mut mouse_changed = false;
+
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .selectable_label(
+                                        self.mouse_config.mode == MouseStickMode::Camera,
+                                        "Camera (Decay)",
+                                    )
+                                    .clicked()
+                                {
+                                    self.mouse_config.mode = MouseStickMode::Camera;
+                                    mouse_changed = true;
+                                }
+                                if ui
+                                    .selectable_label(
+                                        self.mouse_config.mode == MouseStickMode::JoystickHold,
+                                        "Joystick (Hold)",
+                                    )
+                                    .clicked()
+                                {
+                                    self.mouse_config.mode = MouseStickMode::JoystickHold;
+                                    mouse_changed = true;
+                                }
+                            });
+                            ui.add_space(4.0);
+
+                            if self.mouse_config.mode == MouseStickMode::JoystickHold {
+                                let center_keys: Vec<String> = self
+                                    .profile
+                                    .bindings_for_action(GamepadAction::CenterMouseStick)
+                                    .into_iter()
+                                    .map(keymap::format_keycode)
+                                    .collect();
+                                let center_label = if center_keys.is_empty() {
+                                    "---".to_string()
+                                } else {
+                                    center_keys.join(" / ")
+                                };
+                                if ui
+                                    .button(format!("Recenter Key: {center_label}"))
+                                    .clicked()
+                                {
+                                    self.listening_for = Some(GamepadAction::CenterMouseStick);
+                                    self.just_started_listening = true;
+                                }
+                                ui.add_space(4.0);
+                            }
 
                             ui.label("Sensitivity");
                             mouse_changed |= ui

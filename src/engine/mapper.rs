@@ -81,8 +81,11 @@ impl InputMapper {
     /// Returns `true` if `code` is bound in the active profile, or `false` if unmapped
     /// so the caller can pass it through untouched.
     pub fn handle_key(&mut self, code: KeyCode, pressed: bool) -> bool {
-        if !self.profile.bindings.contains_key(&code) {
+        let Some(&action) = self.profile.bindings.get(&code) else {
             return false;
+        };
+        if action == GamepadAction::CenterMouseStick && pressed {
+            self.mouse_stick.recenter();
         }
         if pressed {
             self.pressed.insert(code);
@@ -149,6 +152,7 @@ impl InputMapper {
                 GamepadAction::RightStickLeft => right_left = true,
                 GamepadAction::RightStickRight => right_right = true,
                 GamepadAction::WalkModifier => walk_active = true,
+                GamepadAction::CenterMouseStick => {}
             }
         }
 

@@ -50,6 +50,7 @@ pub enum GamepadAction {
     RightStickLeft,
     RightStickRight,
     WalkModifier,
+    CenterMouseStick,
 }
 
 /// Key/mouse-to-gamepad mapping profile.

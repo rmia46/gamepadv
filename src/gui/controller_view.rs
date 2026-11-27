@@ -37,6 +37,7 @@ pub fn action_display_name(action: GamepadAction) -> &'static str {
         GamepadAction::RightStickLeft => "Right Stick Left",
         GamepadAction::RightStickRight => "Right Stick Right",
         GamepadAction::WalkModifier => "Walk Modifier",
+        GamepadAction::CenterMouseStick => "Recenter Mouse Stick",
     }
 }
 

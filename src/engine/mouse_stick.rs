@@ -25,9 +25,22 @@ pub(crate) fn quantize_stick_axes(fx: f64, fy: f64) -> (i16, i16) {
     )
 }
 
+/// Behavior mode for converting mouse movement into an analog stick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum MouseStickMode {
+    /// Velocity-based camera lookaround: decays back to center when mouse stops.
+    #[default]
+    Camera,
+    /// Virtual joystick hold: integrates mouse deltas into a persistent `(x, y)` position.
+    JoystickHold,
+}
+
 /// Configuration parameters for [`MouseStickEngine`].
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MouseStickConfig {
+    /// Mouse-to-stick behavior mode (`Camera` or `JoystickHold`).
+    #[serde(default)]
+    pub mode: MouseStickMode,
     /// Target loop frequency in Hz (default: 250.0).
     pub hz: f64,
     /// Velocity scaling factor mapping counts/sec to normalized stick velocity `[0.0, 1.0]`.
@@ -36,7 +49,7 @@ pub struct MouseStickConfig {
     pub ema_alpha: f64,
     /// Exponential decay half-life in milliseconds applied on idle ticks.
     pub decay_half_life_ms: f64,
-    /// Radial anti-deadzone floor in `[0.0, 1.0)` (e.g., `0.18` for Zelda: BotW).
+    /// Radial anti-deadzone floor in `[0.0, 1.0)` (e.g., `0.18` for 3D action games).
     pub anti_deadzone: f64,
     /// Power curve exponent applied to normalized radial velocity (e.g., `0.75`).
     pub power_gamma: f64,
@@ -47,6 +60,7 @@ pub struct MouseStickConfig {
 impl Default for MouseStickConfig {
     fn default() -> Self {
         Self {
+            mode: MouseStickMode::Camera,
             hz: 250.0,
             sensitivity: 0.0005,
             ema_alpha: 0.4,
@@ -59,7 +73,7 @@ impl Default for MouseStickConfig {
 }
 
 /// Deterministic, zero-allocation DSP engine converting raw mouse deltas into
-/// circularly clamped, anti-deadzone-compensated 16-bit gamepad right-stick axes.
+/// circularly clamped, anti-deadzone-compensated 16-bit gamepad stick axes.
 #[derive(Debug, Clone, Copy)]
 pub struct MouseStickEngine {
     config: MouseStickConfig,
@@ -67,6 +81,8 @@ pub struct MouseStickEngine {
     accum_dy: f64,
     vx: f64,
     vy: f64,
+    hold_x: f64,
+    hold_y: f64,
 }
 
 impl MouseStickEngine {
@@ -79,6 +95,8 @@ impl MouseStickEngine {
             accum_dy: 0.0,
             vx: 0.0,
             vy: 0.0,
+            hold_x: 0.0,
+            hold_y: 0.0,
         }
     }
 
@@ -90,16 +108,27 @@ impl MouseStickEngine {
 
     /// Updates the engine's configuration.
     pub fn set_config(&mut self, config: MouseStickConfig) {
+        if config.mode != self.config.mode {
+            self.reset();
+        }
         self.config = config;
     }
 
-    /// Clears accumulated mouse deltas and internal velocity state.
+    /// Clears accumulated mouse deltas, velocity state, and persistent hold position.
     #[inline]
     pub fn reset(&mut self) {
         self.accum_dx = 0.0;
         self.accum_dy = 0.0;
         self.vx = 0.0;
         self.vy = 0.0;
+        self.hold_x = 0.0;
+        self.hold_y = 0.0;
+    }
+
+    /// Recenters the stick immediately to `(0, 0)` (alias for [`Self::reset`]).
+    #[inline]
+    pub fn recenter(&mut self) {
+        self.reset();
     }
 
     /// Accumulates raw `REL_X` / `REL_Y` mouse deltas. Non-finite inputs are ignored.
@@ -120,6 +149,23 @@ impl MouseStickEngine {
         let dy = self.accum_dy;
         self.accum_dx = 0.0;
         self.accum_dy = 0.0;
+
+        if self.config.mode == MouseStickMode::JoystickHold {
+            let scale = if self.config.sensitivity.is_finite() && self.config.sensitivity > 0.0 {
+                self.config.sensitivity * 6.0
+            } else {
+                0.003
+            };
+            let sy = if self.config.invert_y { -dy } else { dy };
+            self.hold_x += dx * scale;
+            self.hold_y += sy * scale;
+            let r = self.hold_x.hypot(self.hold_y);
+            if r > 1.0 {
+                self.hold_x /= r;
+                self.hold_y /= r;
+            }
+            return quantize_stick_axes(self.hold_x * STICK_MAX_F64, self.hold_y * STICK_MAX_F64);
+        }
 
         if !dt_secs.is_finite() || dt_secs <= 0.0 {
             return self.quantize();
@@ -305,6 +351,45 @@ mod tests {
         engine.feed_delta(100.0, 100.0);
         engine.reset();
 
+        assert_eq!(engine.tick(0.004), (0, 0));
+    }
+
+    #[test]
+    fn joystick_hold_persists_position_after_mouse_stops() {
+        let mut engine = MouseStickEngine::new(MouseStickConfig {
+            mode: MouseStickMode::JoystickHold,
+            sensitivity: 0.001,
+            ..MouseStickConfig::default()
+        });
+
+        engine.feed_delta(0.0, -50.0);
+        let (x1, y1) = engine.tick(0.004);
+        assert_eq!(x1, 0);
+        assert!(y1 < -5000, "y1={y1} should move forward");
+
+        // Subsequent idle ticks must HOLD the same position instead of decaying to 0.
+        for _ in 0..50 {
+            assert_eq!(engine.tick(0.004), (x1, y1));
+        }
+
+        // Pulling back returns toward center.
+        engine.feed_delta(0.0, 50.0);
+        assert_eq!(engine.tick(0.004), (0, 0));
+    }
+
+    #[test]
+    fn joystick_hold_clamps_to_unit_circle_and_recenters() {
+        let mut engine = MouseStickEngine::new(MouseStickConfig {
+            mode: MouseStickMode::JoystickHold,
+            ..MouseStickConfig::default()
+        });
+
+        engine.feed_delta(10000.0, 10000.0);
+        let (x, y) = engine.tick(0.004);
+        assert_eq!(x, y);
+        assert!((x as f64).hypot(y as f64) <= STICK_MAX_F64);
+
+        engine.recenter();
         assert_eq!(engine.tick(0.004), (0, 0));
     }
 }
