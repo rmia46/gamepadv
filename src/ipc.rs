@@ -43,16 +43,25 @@ pub fn current_uid_gid() -> io::Result<(u32, u32)> {
 }
 
 /// Picks a per-user/per-PID Unix socket path for `pkexec` daemon IPC.
-pub fn default_socket_path() -> PathBuf {
+pub fn daemon_socket_path() -> PathBuf {
+    socket_path_with_prefix("gamepadv-daemon")
+}
+
+/// Picks a per-user/per-PID Unix socket path for the tray host <-> `--gui-window` IPC.
+pub fn tray_socket_path() -> PathBuf {
+    socket_path_with_prefix("gamepadv-ui")
+}
+
+fn socket_path_with_prefix(prefix: &str) -> PathBuf {
     let pid = std::process::id();
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         let dir = PathBuf::from(runtime_dir);
         if dir.is_dir() {
-            return dir.join(format!("gamepadv-{pid}.sock"));
+            return dir.join(format!("{prefix}-{pid}.sock"));
         }
     }
     let uid = current_uid_gid().map(|(u, _)| u).unwrap_or(0);
-    PathBuf::from(format!("/tmp/gamepadv-{uid}-{pid}.sock"))
+    PathBuf::from(format!("/tmp/{prefix}-{uid}-{pid}.sock"))
 }
 
 /// RAII guard that removes the Unix socket file when dropped.

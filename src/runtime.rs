@@ -14,8 +14,8 @@ use crate::engine::{GamepadState, InputMapper, MouseStickConfig, MouseStickEngin
 use crate::gui::tray::{GamepadVTray, TrayCommand};
 use crate::input::{probe_input_devices, InputRig};
 use crate::ipc::{
-    bind_restricted_socket, current_uid_gid, default_socket_path, read_json_line,
-    write_json_line, IpcCommand, IpcSnapshot,
+    bind_restricted_socket, current_uid_gid, daemon_socket_path, read_json_line,
+    tray_socket_path, write_json_line, IpcCommand, IpcSnapshot,
 };
 use crate::profile::{key_display_name, Profile, ProfileConfig};
 use crate::virtual_pad::VirtualXbox360;
@@ -308,7 +308,7 @@ fn run_pkexec_ipc_client(
         }
     };
     let (uid, gid) = current_uid_gid().unwrap_or((1000, 1000));
-    let sock_path = default_socket_path();
+    let sock_path = daemon_socket_path();
 
     let child = match Command::new("pkexec")
         .arg(&exe)
@@ -1041,7 +1041,7 @@ pub fn run_tray_host(
         return 0;
     };
 
-    let sock_path = default_socket_path();
+    let sock_path = tray_socket_path();
     let (listener, _sock_guard) = match bind_restricted_socket(&sock_path, None) {
         Ok(pair) => pair,
         Err(err) => {
@@ -1147,9 +1147,13 @@ pub fn run_tray_host(
                 last_key: snap.last_key.clone(),
                 mouse_delta: snap.mouse_delta,
             };
-            if write_json_line(stream, &ipc_snap).is_err() {
-                ui_stream = None;
-                ui_reader = None;
+            match write_json_line(stream, &ipc_snap) {
+                Ok(()) => {}
+                Err(err) if err.kind() == ErrorKind::WouldBlock => {}
+                Err(_) => {
+                    ui_stream = None;
+                    ui_reader = None;
+                }
             }
         }
 
