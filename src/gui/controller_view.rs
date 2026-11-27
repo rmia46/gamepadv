@@ -1,5 +1,5 @@
 use eframe::egui::{
-    self, Align2, Color32, FontId, Key, Pos2, Rect, Rounding, Sense, Stroke, Ui, Vec2,
+    self, Align2, Color32, FontId, Pos2, Rect, Rounding, Sense, Stroke, Ui, Vec2,
 };
 use evdev::KeyCode;
 
@@ -59,6 +59,14 @@ fn binding_label(profile: &Profile, action: GamepadAction) -> String {
     }
 }
 
+/// Whether a newly captured key adds to or replaces existing bindings for an action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BindMode {
+    #[default]
+    Add,
+    Replace,
+}
+
 /// Captures a key or mouse button press when `listening_for` is active.
 /// Returns `true` if `profile` was modified.
 pub fn handle_listening_input(
@@ -67,6 +75,8 @@ pub fn handle_listening_input(
     listening_for: &mut Option<GamepadAction>,
     just_started_listening: &mut bool,
     prev_modifiers: &mut egui::Modifiers,
+    bind_mode: BindMode,
+    banner_rect: Option<Rect>,
 ) -> bool {
     let current_mods = ui.input(|i| i.modifiers);
 
@@ -81,20 +91,16 @@ pub fn handle_listening_input(
         return false;
     };
 
+    let pointer_in_banner = banner_rect.is_some_and(|r| {
+        ui.input(|i| i.pointer.interact_pos())
+            .is_some_and(|p| r.contains(p))
+    });
+
     let mut captured: Option<KeyCode> = None;
-    let mut cancelled = false;
 
     ui.input(|i| {
         for event in &i.events {
             match event {
-                egui::Event::Key {
-                    key: Key::Escape,
-                    pressed: true,
-                    ..
-                } => {
-                    cancelled = true;
-                    break;
-                }
                 egui::Event::Key {
                     key,
                     pressed: true,
@@ -110,7 +116,7 @@ pub fn handle_listening_input(
                     button,
                     pressed: true,
                     ..
-                } => {
+                } if !pointer_in_banner => {
                     if let Some(code) = pointer_button_to_evdev(*button) {
                         captured = Some(code);
                         break;
@@ -122,7 +128,7 @@ pub fn handle_listening_input(
     });
 
     // Fallback for standalone modifier presses (Shift/Ctrl/Alt) that may not emit Event::Key.
-    if !cancelled && captured.is_none() {
+    if captured.is_none() {
         if current_mods.shift && !prev_modifiers.shift {
             captured = Some(KeyCode::KEY_LEFTSHIFT);
         } else if current_mods.ctrl && !prev_modifiers.ctrl {
@@ -134,13 +140,11 @@ pub fn handle_listening_input(
 
     *prev_modifiers = current_mods;
 
-    if cancelled {
-        *listening_for = None;
-        return false;
-    }
-
     if let Some(code) = captured {
-        profile.add_binding(action, code);
+        match bind_mode {
+            BindMode::Add => profile.add_binding(action, code),
+            BindMode::Replace => profile.set_binding(action, code),
+        }
         *listening_for = None;
         return true;
     }
@@ -148,54 +152,78 @@ pub fn handle_listening_input(
     false
 }
 
-/// Draws the interactive Xbox 360 virtual controller and returns `true` if `profile` changed.
+/// Draws the interactive Xbox 360 virtual controller and returns `(changed, banner_rect)`.
 pub fn draw_controller(
     ui: &mut Ui,
     profile: &mut Profile,
     state: &GamepadState,
     listening_for: &mut Option<GamepadAction>,
     just_started_listening: &mut bool,
-) -> bool {
+    bind_mode: &mut BindMode,
+) -> (bool, Option<Rect>) {
     let mut changed = false;
+    let mut banner_rect: Option<Rect> = None;
 
     if let Some(action) = *listening_for {
-        let current_keys: Vec<String> = profile
-            .bindings_for_action(action)
-            .into_iter()
-            .map(format_keycode)
-            .collect();
-        let current_str = if current_keys.is_empty() {
-            "none".to_string()
-        } else {
-            current_keys.join(", ")
-        };
+        let current_keys = profile.bindings_for_action(action);
 
-        egui::Frame::none()
-            .fill(Color32::from_rgb(56, 44, 18))
+        let frame_resp = egui::Frame::none()
+            .fill(Color32::from_rgb(42, 34, 18))
             .stroke(Stroke::new(1.5_f32, Color32::from_rgb(245, 180, 50)))
             .rounding(Rounding::same(8.0))
             .inner_margin(egui::Margin::symmetric(12.0, 8.0))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.colored_label(
                         Color32::from_rgb(255, 215, 90),
                         format!(
-                            "Adding binding for {} [current: {current_str}] — press key/mouse (Esc cancels)",
+                            "Binding {} — press any key (incl. Esc) or click outside for mouse",
                             action_display_name(action)
                         ),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Cancel").clicked() {
+                        if ui.button("Done").clicked() {
                             *listening_for = None;
                         }
-                        if !current_keys.is_empty() && ui.button("Clear All").clicked() {
+                        if !current_keys.is_empty() && ui.button("Clear").clicked() {
                             profile.clear_action_bindings(action);
-                            *listening_for = None;
                             changed = true;
+                        }
+                        ui.separator();
+                        if ui
+                            .selectable_label(*bind_mode == BindMode::Replace, "Replace")
+                            .clicked()
+                        {
+                            *bind_mode = BindMode::Replace;
+                        }
+                        if ui
+                            .selectable_label(*bind_mode == BindMode::Add, "Add")
+                            .clicked()
+                        {
+                            *bind_mode = BindMode::Add;
                         }
                     });
                 });
+
+                if !current_keys.is_empty() {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new("Mapped:")
+                                .small()
+                                .color(Color32::from_rgb(210, 200, 170)),
+                        );
+                        for key in current_keys {
+                            let label = format!("{}  ×", format_keycode(key));
+                            if ui.small_button(label).clicked() {
+                                profile.remove_binding(key);
+                                changed = true;
+                            }
+                        }
+                    });
+                }
             });
+        banner_rect = Some(frame_resp.response.rect);
         ui.add_space(6.0);
     }
 
@@ -575,7 +603,7 @@ pub fn draw_controller(
         }
     });
 
-    changed
+    (changed, banner_rect)
 }
 
 #[allow(clippy::too_many_arguments)]

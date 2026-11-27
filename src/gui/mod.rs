@@ -18,6 +18,7 @@ pub struct GamepadVApp {
     profile: Profile,
     mouse_config: MouseStickConfig,
     listening_for: Option<GamepadAction>,
+    bind_mode: controller_view::BindMode,
     just_started_listening: bool,
     prev_modifiers: egui::Modifiers,
     status_banner: Option<(String, bool)>,
@@ -45,6 +46,7 @@ impl GamepadVApp {
             profile,
             mouse_config,
             listening_for: None,
+            bind_mode: controller_view::BindMode::Add,
             just_started_listening: false,
             prev_modifiers: egui::Modifiers::default(),
             status_banner: None,
@@ -566,6 +568,18 @@ impl eframe::App for GamepadVApp {
                                     );
                                 }
                             });
+                            ui.add_space(4.0);
+                            if ui.button("Clear All Bindings (Unmap All)").clicked() {
+                                self.profile.bindings.clear();
+                                self.listening_for = None;
+                                self.engine.update_profile(self.profile.clone());
+                                self.confirmation_popup = Some((
+                                    "All Bindings Cleared".to_string(),
+                                    "All controller buttons and stick keys have been unmapped."
+                                        .to_string(),
+                                    false,
+                                ));
+                            }
                         });
 
                         if let Some((msg, is_err)) = &self.status_banner {
@@ -740,12 +754,13 @@ impl eframe::App for GamepadVApp {
                     .inner_margin(egui::Margin::same(14.0)),
             )
             .show(ctx, |ui| {
-                let mut profile_changed = controller_view::draw_controller(
+                let (mut profile_changed, banner_rect) = controller_view::draw_controller(
                     ui,
                     &mut self.profile,
                     &snap.latest_state,
                     &mut self.listening_for,
                     &mut self.just_started_listening,
+                    &mut self.bind_mode,
                 );
 
                 profile_changed |= controller_view::handle_listening_input(
@@ -754,6 +769,8 @@ impl eframe::App for GamepadVApp {
                     &mut self.listening_for,
                     &mut self.just_started_listening,
                     &mut self.prev_modifiers,
+                    self.bind_mode,
+                    banner_rect,
                 );
 
                 if profile_changed {
