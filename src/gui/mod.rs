@@ -641,20 +641,55 @@ impl eframe::App for GamepadVApp {
             egui::Window::new(title)
                 .collapsible(false)
                 .resizable(false)
-                .default_width(420.0)
+                .fixed_size([420.0, 140.0])
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    theme::card_frame().show(ui, |ui| {
-                        let color = if is_err {
-                            theme::ACCENT_RED
-                        } else {
-                            theme::ACCENT_GREEN
-                        };
-                        ui.label(egui::RichText::new(&message).size(13.5).color(color));
+                    ui.add_space(6.0);
+                    let accent = if is_err {
+                        theme::ACCENT_RED
+                    } else {
+                        theme::ACCENT_GREEN
+                    };
+                    ui.horizontal(|ui| {
+                        let badge = if is_err { "ERROR" } else { "OK" };
+                        egui::Frame::none()
+                            .fill(accent.linear_multiply(0.2))
+                            .stroke(Stroke::new(1.0_f32, accent))
+                            .rounding(Rounding::same(5.0))
+                            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(badge)
+                                        .size(11.0)
+                                        .strong()
+                                        .color(accent),
+                                );
+                            });
+                        ui.add_space(8.0);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&message)
+                                    .size(13.5)
+                                    .color(theme::TEXT_PRIMARY),
+                            )
+                            .wrap(),
+                        );
                     });
+
+                    ui.add_space(16.0);
+                    ui.separator();
                     ui.add_space(8.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("OK").clicked()
+                        let ok_btn = egui::Button::new(
+                            egui::RichText::new("OK")
+                                .strong()
+                                .size(13.5)
+                                .color(Color32::WHITE),
+                        )
+                        .fill(theme::ACCENT_BLUE)
+                        .min_size(egui::vec2(92.0, 30.0));
+
+                        if ui.add(ok_btn).clicked()
                             || ctx.input(|i| {
                                 i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)
                             })
