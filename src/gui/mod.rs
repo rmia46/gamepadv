@@ -1,8 +1,11 @@
 pub mod controller_view;
 pub mod keymap;
 pub mod theme;
+pub mod tray;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, Rounding, Stroke};
@@ -31,15 +34,37 @@ pub struct GamepadVApp {
     show_about_modal: bool,
     show_how_to_use_modal: bool,
     show_slider_guide_modal: bool,
+    tray_handle: Option<ksni::blocking::Handle<tray::GamepadVTray>>,
+    tray_rx: Option<mpsc::Receiver<tray::TrayCommand>>,
+    tray_active: Arc<AtomicBool>,
+    tray_visible: Arc<AtomicBool>,
+    minimize_to_tray_on_close: bool,
+    quitting: bool,
 }
 
 impl GamepadVApp {
     /// Creates a new [`GamepadVApp`] and spawns the 250Hz background input engine.
     #[must_use]
-    pub fn new(profile: Profile, mouse_config: MouseStickConfig, start_paused: bool) -> Self {
+    pub fn new(
+        egui_ctx: egui::Context,
+        profile: Profile,
+        mouse_config: MouseStickConfig,
+        start_paused: bool,
+    ) -> Self {
         let engine = EngineHandle::spawn(profile.clone(), mouse_config, start_paused);
         let last_snapshot = engine.snapshot();
         let saved_profiles = ProfileConfig::list_saved_profiles();
+        let tray_active = Arc::new(AtomicBool::new(last_snapshot.active));
+        let tray_visible = Arc::new(AtomicBool::new(true));
+        let (tray_handle, tray_rx) = match tray::GamepadVTray::spawn(
+            egui_ctx,
+            Arc::clone(&tray_active),
+            Arc::clone(&tray_visible),
+        ) {
+            Some((h, rx)) => (Some(h), Some(rx)),
+            None => (None, None),
+        };
+
         Self {
             engine,
             last_snapshot,
@@ -59,6 +84,12 @@ impl GamepadVApp {
             show_about_modal: false,
             show_how_to_use_modal: false,
             show_slider_guide_modal: false,
+            tray_handle,
+            tray_rx,
+            tray_active,
+            tray_visible,
+            minimize_to_tray_on_close: true,
+            quitting: false,
         }
     }
 
@@ -173,6 +204,7 @@ pub fn run_gui(
         Box::new(move |cc| {
             theme::apply_modern_theme(&cc.egui_ctx);
             Ok(Box::new(GamepadVApp::new(
+                cc.egui_ctx.clone(),
                 profile,
                 mouse_config,
                 start_paused,
@@ -187,6 +219,56 @@ impl eframe::App for GamepadVApp {
             self.last_snapshot = fresh;
         }
         let snap = self.last_snapshot.clone();
+
+        // Sync active state with tray icon/menu if changed.
+        if self.tray_active.swap(snap.active, Ordering::Relaxed) != snap.active {
+            if let Some(handle) = &self.tray_handle {
+                handle.update(|_| {});
+            }
+        }
+
+        // Intercept window close button (X) to minimize to tray when enabled.
+        if ctx.input(|i| i.viewport().close_requested())
+            && self.minimize_to_tray_on_close
+            && !self.quitting
+            && self.tray_handle.is_some()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.tray_visible.store(false, Ordering::Relaxed);
+            if let Some(handle) = &self.tray_handle {
+                handle.update(|_| {});
+            }
+        }
+
+        // Process tray commands (Show/Hide, Toggle Active, Quit).
+        if let Some(rx) = &self.tray_rx {
+            while let Ok(cmd) = rx.try_recv() {
+                match cmd {
+                    tray::TrayCommand::ToggleShowHide => {
+                        let next_visible = !self.tray_visible.load(Ordering::Relaxed);
+                        self.tray_visible.store(next_visible, Ordering::Relaxed);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(next_visible));
+                        if next_visible {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        }
+                        if let Some(handle) = &self.tray_handle {
+                            handle.update(|_| {});
+                        }
+                    }
+                    tray::TrayCommand::ToggleActive => {
+                        if snap.permission_error.is_none() && !snap.unlocking {
+                            self.engine.set_active(!snap.active);
+                        }
+                    }
+                    tray::TrayCommand::Quit => {
+                        self.quitting = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+        }
 
         // App Menu Bar: File | Profiles | Settings | Help
         egui::TopBottomPanel::top("menu_bar")
@@ -245,7 +327,16 @@ impl eframe::App for GamepadVApp {
                             ui.close_menu();
                         }
                         ui.separator();
+                        if self.tray_handle.is_some() && ui.button("Minimize to Tray").clicked() {
+                            self.tray_visible.store(false, Ordering::Relaxed);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            if let Some(handle) = &self.tray_handle {
+                                handle.update(|_| {});
+                            }
+                            ui.close_menu();
+                        }
                         if ui.button("Quit").clicked() {
+                            self.quitting = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
@@ -268,6 +359,12 @@ impl eframe::App for GamepadVApp {
 
                     ui.menu_button("Settings", |ui| {
                         ui.checkbox(&mut self.show_tuning_panel, "Show Tuning Panel");
+                        if self.tray_handle.is_some() {
+                            ui.checkbox(
+                                &mut self.minimize_to_tray_on_close,
+                                "Minimize to Tray on Close",
+                            );
+                        }
                         if ui
                             .checkbox(&mut self.mouse_config.invert_y, "Invert Y Axis")
                             .changed()
@@ -306,6 +403,16 @@ impl eframe::App for GamepadVApp {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.tray_handle.is_some()
+                            && ui.small_button("Minimize to Tray").clicked()
+                        {
+                            self.tray_visible.store(false, Ordering::Relaxed);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            if let Some(handle) = &self.tray_handle {
+                                handle.update(|_| {});
+                            }
+                        }
+                        ui.add_space(6.0);
                         ui.label(
                             egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
                                 .small()
