@@ -158,7 +158,10 @@ pub fn run_gui(
     let options = eframe::NativeOptions {
         vsync: false,
         viewport: egui::ViewportBuilder::default()
-            .with_title("GamepadV — Virtual Xbox 360 Controller")
+            .with_title(format!(
+                "GamepadV v{} — Virtual Xbox 360 Controller",
+                env!("CARGO_PKG_VERSION")
+            ))
             .with_inner_size([1080.0, 720.0])
             .with_min_inner_size([860.0, 600.0]),
         ..Default::default()
@@ -300,6 +303,14 @@ impl eframe::App for GamepadVApp {
                             self.show_slider_guide_modal = true;
                             ui.close_menu();
                         }
+                    });
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                .small()
+                                .color(theme::TEXT_MUTED),
+                        );
                     });
                 });
             });
